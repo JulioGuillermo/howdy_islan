@@ -117,6 +117,15 @@ static void dispatch(struct island *island, char kind, const uint8_t *payload, s
 	case 'E':
 		island_finish(island, (int)strtol(text, NULL, 10));
 		break;
+	case 'N':
+		island_enrol(island);
+		break;
+	case 'P':
+		island_show_enrolment_progress(island, strtod(text, NULL));
+		break;
+	case 'A':
+		island_finish_enrolment(island, text);
+		break;
 	}
 }
 

@@ -1,7 +1,8 @@
 # howdy-island
 
 A notch at the top of the screen that opens while [Howdy](https://github.com/boltgolt/howdy) scans
-your face, showing what the IR camera sees, mirrored so you know which way to turn.
+your face, to log you in or to enrol it with `howdy add`, showing what the IR camera sees, mirrored
+so you know which way to turn.
 
 ![howdy-island at rest, scanning, recognised and failing](docs/preview.png)
 
@@ -52,8 +53,9 @@ flowchart LR
   D --> E[every Wayland session in /run/user]
 ```
 
-- `howdy/patch_compare.py` adds a few marked lines to Howdy's `compare.py` that send each analysed
-  frame, the face boxes and the result to the socket. A pacman hook adds them again after every
+- `howdy/patch_howdy.py` adds a few marked lines to Howdy's `compare.py` (authentication) and
+  `cli/add.py` (`howdy add`) that send each analysed frame, the face boxes and the result to the
+  socket. A pacman hook adds them again after every
   Howdy upgrade. Without the service listening, Howdy behaves as usual.
 - `island/` is the service. It watches `/run/user/*` for Wayland sockets, connects to each
   compositor and draws the notch with cairo, at the screen's refresh rate while it moves and not at

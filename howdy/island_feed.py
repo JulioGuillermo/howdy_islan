@@ -1,11 +1,11 @@
-"""Sends Howdy's scan to the howdy-island system service.
+"""Sends Howdy's scan, or howdy add's enrolment, to the howdy-island system service.
 
-Called from the hooks that patch_compare.py adds to Howdy's compare.py. Never raises: without the
-service listening, every call is a no-op and Howdy carries on as usual.
+Called from the hooks that patch_howdy.py adds to Howdy's compare.py and cli/add.py. Never raises:
+without the service listening, every call is a no-op and Howdy carries on as usual.
 
 One datagram per message, a letter then its data: S uid user, R timeout threshold, G gray frame
 (width and height as little-endian 16-bit numbers, then the pixels), D face boxes (4 fractions
-each), C certainty, E exit code.
+each), C certainty, E exit code. Enrolment: N start, P progress fraction, A result.
 """
 import os
 import pwd
@@ -28,6 +28,19 @@ def begin(user):
 		return
 	_socket_paths.append(SOCKET_PATH)
 	_send(b"S", f"{uid} {user}".encode())
+
+
+def begin_enrolment(user):
+	begin(user)
+	_send(b"N", b"")
+
+
+def enrolment_progress(fraction):
+	_send(b"P", f"{fraction:.3f}".encode())
+
+
+def enrolment_finished(reason):
+	_send(b"A", reason.encode())
 
 
 def scan(timeout, threshold):

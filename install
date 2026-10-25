@@ -25,16 +25,14 @@ install_island() {
 	sudo install -Dm644 -t /usr/lib/systemd/system "$HERE/system/howdy-island.socket" "$HERE/system/howdy-island.service"
 	sudo install -Dm644 "$HERE/system/howdy-island.hook" /etc/pacman.d/hooks/howdy-island.hook
 
-	sudo python3 "$LIB_DIR/patch_compare.py"
+	sudo python3 "$LIB_DIR/patch_howdy.py"
 
 	sudo systemctl daemon-reload
 	sudo systemctl enable --now $UNITS
 }
 
 uninstall_island() {
-	if [[ -f $LIB_DIR/patch_compare.py ]]; then
-		sudo python3 "$LIB_DIR/patch_compare.py" --remove
-	fi
+	sudo python3 "$HERE/howdy/patch_howdy.py" --remove
 	sudo systemctl disable --now $UNITS 2>/dev/null || true
 	sudo rm -rf "$LIB_DIR"
 	sudo rm -f /usr/lib/systemd/system/howdy-island.socket /usr/lib/systemd/system/howdy-island.service \

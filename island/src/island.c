@@ -29,6 +29,19 @@ struct failure_text {
 	const char *subtitle;
 };
 
+struct enrolment_failure_text {
+	const char *reason;
+	const char *title;
+	const char *subtitle;
+};
+
+static const struct enrolment_failure_text ENROLMENT_FAILURE_TEXTS[] = {
+	{"no-face", "No face found", "Look straight at the camera"},
+	{"multiple-faces", "More than one face", "Only you, please"},
+	{"dark", "Too dark", "Check the IR camera"},
+	{"black", "Camera sees nothing", "Is the IR emitter on?"},
+};
+
 static const struct failure_text FAILURE_TEXTS[] = {
 	{10, "No face enrolled", "Add one with sudo howdy add"},
 	{11, "Not recognised", "Use your password"},
@@ -75,7 +88,7 @@ static void collapse(struct island *island)
 
 static bool is_working(const struct island *island)
 {
-	return island->phase == ISLAND_PREPARING || island->phase == ISLAND_SCANNING;
+	return island->phase == ISLAND_PREPARING || island->phase == ISLAND_SCANNING || island->phase == ISLAND_ENROLLING;
 }
 
 static bool is_shaking(const struct island *island)
@@ -113,6 +126,19 @@ void island_scan(struct island *island, double timeout, double threshold)
 	expand(island);
 }
 
+void island_enrol(struct island *island)
+{
+	island->enrolment_progress = 0;
+	set_phase(island, ISLAND_ENROLLING, SCAN_COLOR, "Adding your face", "Look straight at the camera");
+	expand(island);
+}
+
+void island_show_enrolment_progress(struct island *island, double fraction)
+{
+	island->enrolment_progress = clamp(fraction, 0, 1);
+	touch(island);
+}
+
 void island_show_frame(struct island *island, int width, int height, const uint8_t *gray_pixels)
 {
 	if (width <= 0 || height <= 0 || width * height > ISLAND_PREVIEW_MAX_PIXELS)
@@ -140,6 +166,19 @@ void island_show_certainty(struct island *island, double value)
 	touch(island);
 }
 
+static void succeed(struct island *island, const char *title, const char *subtitle)
+{
+	set_phase(island, ISLAND_SUCCESS, SUCCESS_COLOR, title, subtitle);
+	island->collapse_at = island->now + SUCCESS_HOLD_SECONDS;
+}
+
+static void fail(struct island *island, const char *title, const char *subtitle)
+{
+	set_phase(island, ISLAND_FAILURE, FAILURE_COLOR, title, subtitle);
+	island->shake_started_at = island->now;
+	island->collapse_at = island->now + FAILURE_HOLD_SECONDS;
+}
+
 void island_finish(struct island *island, int exit_code)
 {
 	if (island->phase == ISLAND_REST)
@@ -148,8 +187,7 @@ void island_finish(struct island *island, int exit_code)
 	if (exit_code == 0) {
 		char greeting[ISLAND_TEXT_MAX + 8];
 		snprintf(greeting, sizeof greeting, "Hi, %s", island->user);
-		set_phase(island, ISLAND_SUCCESS, SUCCESS_COLOR, "Recognised", greeting);
-		island->collapse_at = island->now + SUCCESS_HOLD_SECONDS;
+		succeed(island, "Recognised", greeting);
 		return;
 	}
 
@@ -163,9 +201,30 @@ void island_finish(struct island *island, int exit_code)
 			subtitle = FAILURE_TEXTS[i].subtitle;
 		}
 	}
-	set_phase(island, ISLAND_FAILURE, FAILURE_COLOR, title, subtitle);
-	island->shake_started_at = island->now;
-	island->collapse_at = island->now + FAILURE_HOLD_SECONDS;
+	fail(island, title, subtitle);
+}
+
+void island_finish_enrolment(struct island *island, const char *reason)
+{
+	if (island->phase == ISLAND_REST)
+		return;
+
+	if (strcmp(reason, "added") == 0) {
+		char saved_for[ISLAND_TEXT_MAX + 16];
+		snprintf(saved_for, sizeof saved_for, "Saved for %s", island->user);
+		succeed(island, "Face added", saved_for);
+		return;
+	}
+
+	const char *title = "Could not add the face";
+	const char *subtitle = reason;
+	for (size_t i = 0; i < sizeof ENROLMENT_FAILURE_TEXTS / sizeof *ENROLMENT_FAILURE_TEXTS; i++) {
+		if (strcmp(ENROLMENT_FAILURE_TEXTS[i].reason, reason) == 0) {
+			title = ENROLMENT_FAILURE_TEXTS[i].title;
+			subtitle = ENROLMENT_FAILURE_TEXTS[i].subtitle;
+		}
+	}
+	fail(island, title, subtitle);
 }
 
 void island_advance(struct island *island, double now)
@@ -226,6 +285,8 @@ double island_progress(const struct island *island)
 	switch (island->phase) {
 	case ISLAND_PREPARING:
 		return 0;
+	case ISLAND_ENROLLING:
+		return island->enrolment_progress;
 	case ISLAND_SCANNING:
 		if (island->scan_timeout <= 0)
 			return 0;
@@ -237,7 +298,7 @@ double island_progress(const struct island *island)
 
 double island_scan_line(const struct island *island)
 {
-	if (island->phase != ISLAND_SCANNING)
+	if (island->phase != ISLAND_SCANNING && island->phase != ISLAND_ENROLLING)
 		return -1;
 	return fmod(island->now, SCAN_LINE_SECONDS) / SCAN_LINE_SECONDS;
 }

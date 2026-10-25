@@ -8,4 +8,4 @@ Target = howdy-git
 [Action]
 Description = Adding the howdy-island hooks to Howdy...
 When = PostTransaction
-Exec = /usr/bin/python3 /usr/lib/howdy-island/patch_compare.py
+Exec = /usr/bin/python3 /usr/lib/howdy-island/patch_howdy.py

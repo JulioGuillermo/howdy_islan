@@ -19,6 +19,7 @@ enum island_phase {
 	ISLAND_REST,
 	ISLAND_PREPARING,
 	ISLAND_SCANNING,
+	ISLAND_ENROLLING,
 	ISLAND_SUCCESS,
 	ISLAND_FAILURE,
 };
@@ -58,6 +59,7 @@ struct island {
 	double threshold;
 	double scan_timeout;
 	double scan_started_at;
+	double enrolment_progress;
 	double shake_started_at;
 	double last_message_at;
 	double collapse_at;
@@ -72,6 +74,12 @@ void island_show_frame(struct island *island, int width, int height, const uint8
 void island_show_faces(struct island *island, const struct face_box *faces, int count);
 void island_show_certainty(struct island *island, double value);
 void island_finish(struct island *island, int exit_code);
+
+/* howdy add: same frames and faces as a scan, its own progress and result. */
+void island_enrol(struct island *island);
+void island_show_enrolment_progress(struct island *island, double fraction);
+/* reason: "added", or why it failed ("no-face", "multiple-faces", "dark", "black"). */
+void island_finish_enrolment(struct island *island, const char *reason);
 
 void island_advance(struct island *island, double now);
 bool island_is_animating(const struct island *island);
