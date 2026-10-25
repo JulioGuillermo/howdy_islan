@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Installs Howdy (face unlock) and adds it to PAM after the password prompt:
+# type the password as usual, or press Enter on an empty prompt to use the face.
+#
+#   ./install_howdy              install, configure, enrol face, patch PAM
+#   ./install_howdy --uninstall  remove the PAM lines (leaves the package installed)
+#
+# PAM_SERVICES overrides which files under /etc/pam.d get the lines.
+
+set -euo pipefail
+
+PAM_SERVICES=${PAM_SERVICES:-"sudo polkit-1 system-local-login"}
+HOWDY_CONFIG=/etc/howdy/config.ini
+BLOCK_START="# >>> howdy (install_howdy)"
+BLOCK_END="# <<< howdy (install_howdy)"
+
+die() {
+	echo "ERROR: $*" >&2
+	exit 1
+}
+
+find_ir_camera() {
+	local device
+	for device in /dev/video*; do
+		if v4l2-ctl -d "$device" --list-formats 2>/dev/null | grep -q "'GREY'"; then
+			echo "$device"
+			return
+		fi
+	done
+}
+
+set_config() {
+	local key=$1 value=$2
+	sudo sed -i "s|^$key = .*|$key = $value|" "$HOWDY_CONFIG"
+}
+
+remove_pam_block() {
+	local file=$1
+	sudo sed -i "/^$BLOCK_START\$/,/^$BLOCK_END\$/d" "$file"
+}
+
+add_pam_block() {
+	local file=$1
+	local block="$BLOCK_START
+auth       sufficient   pam_unix.so try_first_pass likeauth
+auth       sufficient   pam_howdy.so
+$BLOCK_END"
+
+	sudo cp -n "$file" "$file.bak-howdy"
+	remove_pam_block "$file"
+
+	local patched
+	patched=$(mktemp)
+	if head -1 "$file" | grep -q '^#%PAM'; then
+		{ head -1 "$file"; echo "$block"; tail -n +2 "$file"; } >"$patched"
+	else
+		{ echo "$block"; cat "$file"; } >"$patched"
+	fi
+	sudo install -m 644 -o root -g root "$patched" "$file"
+	rm "$patched"
+}
+
+has_nvidia_gpu() {
+	lspci | grep -iE 'vga|3d|display' | grep -qi nvidia
+}
+
+build_dlib() {
+	local use_cuda=$1
+	local use_cpu=$((1 - use_cuda))
+	local build_dir
+	build_dir=$(mktemp -d)
+
+	(
+		cd "$build_dir"
+		yay -G python-dlib
+		cd python-dlib
+		sed -i -e "s/^_build_cpu=.*/_build_cpu=$use_cpu/" \
+			-e "s/^_build_cuda=.*/_build_cuda=$use_cuda/" PKGBUILD
+		makepkg -si --needed
+	)
+	rm -rf "$build_dir"
+}
+
+uninstall() {
+	local service
+	for service in $PAM_SERVICES; do
+		[[ -f /etc/pam.d/$service ]] || continue
+		remove_pam_block "/etc/pam.d/$service"
+		echo "PAM: howdy removed from /etc/pam.d/$service"
+	done
+}
+
+install() {
+	local use_cuda=0
+	local opencv_package=python-opencv
+	if has_nvidia_gpu; then
+		use_cuda=1
+		opencv_package=python-opencv-cuda
+		echo "== NVIDIA GPU found: using CUDA builds of OpenCV and dlib"
+	else
+		echo "== No NVIDIA GPU: using CPU builds of OpenCV and dlib"
+	fi
+
+	sudo pacman -S --needed "$opencv_package" v4l-utils
+
+	if ! pacman -T python-dlib >/dev/null; then
+		echo "== Building python-dlib (compiles, it takes a while)"
+		build_dlib "$use_cuda"
+	fi
+
+	echo "== Installing howdy-git from AUR"
+	yay -S --needed howdy-git python-elevate
+
+	local camera=${1:-$(find_ir_camera)}
+	[[ -n $camera ]] || die "no IR camera found, pass it as argument: ./install_howdy /dev/videoN"
+	echo "== IR camera: $camera"
+
+	set_config device_path "$camera"
+	set_config detection_notice true
+	if [[ $use_cuda -eq 1 ]]; then
+		set_config use_cnn true
+	fi
+
+	if ! sudo test -s "/etc/howdy/models/$USER.dat"; then
+		echo "== Look at the camera to enrol your face"
+		sudo howdy add
+	fi
+
+	local service
+	for service in $PAM_SERVICES; do
+		[[ -f /etc/pam.d/$service ]] || continue
+		add_pam_block "/etc/pam.d/$service"
+		echo "PAM: howdy added to /etc/pam.d/$service (backup in $service.bak-howdy)"
+	done
+
+	echo
+	echo "Done. Password first; press Enter on an empty prompt to use your face."
+	echo "Live preview: sudo howdy test   (or howdy-gtk)"
+}
+
+[[ $EUID -ne 0 ]] || die "run it as your user, not root (yay refuses root)"
+sudo -v
+
+case ${1:-} in
+--uninstall) uninstall ;;
+*) install "${1:-}" ;;
+esac

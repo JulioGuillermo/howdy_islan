@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Installs Howdy (face unlock, through install_howdy) and howdy-island: a notch always at the top of
+# the screen that opens with Howdy's live IR scan. A small C program talking Wayland directly, run as
+# a system service from boot, so it is on every compositor with wlr-layer-shell, the login screen's
+# included (Hyprland, also above hyprlock, sway...). Leaves the Hyprland and sway configs untouched.
+#
+#   ./install              install both
+#   ./install --uninstall  remove the island and Howdy's PAM lines (the howdy package stays)
+
+set -euo pipefail
+
+HERE=$(dirname "$(realpath "$0")")
+LIB_DIR=/usr/lib/howdy-island
+UNITS="howdy-island.socket howdy-island.service"
+
+install_island() {
+	sudo pacman -S --needed gcc make pkgconf wayland wayland-protocols cairo
+	make -C "$HERE/island" clean
+	make -C "$HERE/island"
+
+	sudo systemctl stop $UNITS 2>/dev/null || true
+	sudo rm -rf "$LIB_DIR"
+	sudo install -Dm755 "$HERE/island/build/howdy-island" "$LIB_DIR/howdy-island"
+	sudo install -Dm644 -t "$LIB_DIR" "$HERE"/howdy/*.py
+	sudo install -Dm644 -t /usr/lib/systemd/system "$HERE/system/howdy-island.socket" "$HERE/system/howdy-island.service"
+	sudo install -Dm644 "$HERE/system/howdy-island.hook" /etc/pacman.d/hooks/howdy-island.hook
+
+	sudo python3 "$LIB_DIR/patch_compare.py"
+
+	sudo systemctl daemon-reload
+	sudo systemctl enable --now $UNITS
+}
+
+uninstall_island() {
+	if [[ -f $LIB_DIR/patch_compare.py ]]; then
+		sudo python3 "$LIB_DIR/patch_compare.py" --remove
+	fi
+	sudo systemctl disable --now $UNITS 2>/dev/null || true
+	sudo rm -rf "$LIB_DIR"
+	sudo rm -f /usr/lib/systemd/system/howdy-island.socket /usr/lib/systemd/system/howdy-island.service \
+		/etc/pacman.d/hooks/howdy-island.hook
+	sudo systemctl daemon-reload
+}
+
+[[ $EUID -ne 0 ]] || { echo "Run it as your user, not root" >&2; exit 1; }
+
+case ${1:-} in
+--uninstall)
+	uninstall_island
+	"$HERE/howdy/install_howdy" --uninstall
+	echo "howdy-island removed and Howdy taken out of PAM."
+	;;
+*)
+	"$HERE/howdy/install_howdy"
+	install_island
+	echo "Done. Try it in front of the laptop: sudo -k; sudo true  (empty password, Enter)"
+	;;
+esac
