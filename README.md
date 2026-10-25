@@ -66,6 +66,10 @@ flowchart LR
 The service runs as root to reach every user's Wayland socket, inside a strict systemd sandbox: no
 network, read-only system, and only the capabilities needed to open those sockets.
 
+Any user may write to the socket, because a screen locker runs Howdy as the user instead of root.
+The kernel tells the island who sent each message: a user can only show a scan of their own, and
+only root (sudo, polkit, the login screen) reaches the login screen.
+
 ## Layout
 
 | Path | What |

@@ -53,9 +53,11 @@ static uid_t uid_of(const char *user)
 	return entry ? entry->pw_uid : NO_UID;
 }
 
-static bool sees_scan(uid_t display_owner, const struct island *scan, uid_t login_screen_uid)
+static bool sees_scan(uid_t display_owner, const struct island *scan, const struct feed *feed, uid_t login_screen_uid)
 {
-	return display_owner == scan->user_uid || display_owner == login_screen_uid;
+	if (display_owner == login_screen_uid)
+		return feed_scan_started_by_root(feed);
+	return display_owner == scan->user_uid;
 }
 
 int main(int argc, char **argv)
@@ -70,8 +72,8 @@ int main(int argc, char **argv)
 	scan.user_uid = NO_UID;
 	uid_t login_screen_uid = uid_of(LOGIN_SCREEN_USER);
 
-	int feed_fd = feed_open(argc > 1 ? argv[1] : DEFAULT_SOCKET_PATH);
-	if (feed_fd < 0) {
+	struct feed feed;
+	if (!feed_open(&feed, argc > 1 ? argv[1] : DEFAULT_SOCKET_PATH)) {
 		perror("howdy-island: cannot open the feed socket");
 		return 1;
 	}
@@ -89,7 +91,7 @@ int main(int argc, char **argv)
 		int display_count = display_watch_displays(&watch, displays, owners);
 
 		struct pollfd fds[FIXED_POLL_FDS + DISPLAY_WATCH_MAX];
-		fds[0] = (struct pollfd){.fd = feed_fd, .events = POLLIN};
+		fds[0] = (struct pollfd){.fd = feed.fd, .events = POLLIN};
 		fds[1] = (struct pollfd){.fd = display_watch_fd(&watch), .events = POLLIN};
 		for (int i = 0; i < display_count; i++)
 			fds[FIXED_POLL_FDS + i] = (struct pollfd){.fd = display_prepare_poll(displays[i]), .events = POLLIN};
@@ -112,7 +114,7 @@ int main(int argc, char **argv)
 
 		enum island_phase phase_before = scan.phase;
 		island_advance(&scan, now);
-		int message_count = (fds[0].revents & POLLIN) ? feed_receive(feed_fd, &scan) : 0;
+		int message_count = (fds[0].revents & POLLIN) ? feed_receive(&feed, &scan) : 0;
 		if (fds[1].revents & POLLIN)
 			display_watch_handle_events(&watch, now);
 
@@ -128,7 +130,7 @@ int main(int argc, char **argv)
 
 		bool audience_may_have_changed = scan.phase != phase_before;
 		for (int i = 0; i < display_count; i++) {
-			bool sees = sees_scan(owners[i], &scan, login_screen_uid);
+			bool sees = sees_scan(owners[i], &scan, &feed, login_screen_uid);
 			if ((changed && sees) || audience_may_have_changed)
 				display_mark_dirty(displays[i]);
 			display_render(displays[i], sees ? &scan : &resting);

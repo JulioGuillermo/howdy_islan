@@ -3,7 +3,8 @@ Description=Howdy island: receives Howdy's live scan
 
 [Socket]
 ListenDatagram=/run/howdy-island/island.sock
-SocketMode=0600
+SocketMode=0666
+PassCredentials=yes
 DirectoryMode=0755
 RemoveOnStop=yes
 
