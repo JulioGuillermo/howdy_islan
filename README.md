@@ -38,7 +38,7 @@ sudo -k; sudo true
 | | Hyprland | sway, river, niri, labwc | GNOME | KDE Plasma |
 | --- | --- | --- | --- | --- |
 | `sudo`, polkit dialogs | yes | yes | yes, through the extension | should, untested |
-| Lock screen | yes, above hyprlock | no | yes, but GNOME only locks when run from GDM | no |
+| Lock screen | yes, above hyprlock | no | should, untested (GNOME only locks when run from GDM) | no |
 | Login screen | yes, if the greeter runs on it | yes, if the greeter runs on it | no (GDM's greeter loads no extensions) | if the greeter runs on a wlroots compositor |
 
 On a laptop it sits on the built-in panel, under the camera. A scan opens it only in the sessions of
