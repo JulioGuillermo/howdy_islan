@@ -3,6 +3,7 @@
 # the screen that opens with Howdy's live IR scan. A small C program talking Wayland directly, run as
 # a system service from boot, so it is on every compositor with wlr-layer-shell, the login screen's
 # included (Hyprland, also above hyprlock, sway...). Leaves the Hyprland and sway configs untouched.
+# When GNOME is installed, also a GNOME Shell extension that draws the island there.
 #
 #   ./install              install both
 #   ./install --uninstall  remove the island and Howdy's PAM lines (the howdy package stays)
@@ -12,6 +13,7 @@ set -euo pipefail
 HERE=$(dirname "$(realpath "$0")")
 LIB_DIR=/usr/lib/howdy-island
 UNITS="howdy-island.socket howdy-island.service"
+GNOME_EXTENSION_DIR=/usr/share/gnome-shell/extensions/howdy-island@julioguillermo.github.io
 
 install_island() {
 	sudo pacman -S --needed gcc make pkgconf wayland wayland-protocols cairo
@@ -31,6 +33,24 @@ install_island() {
 	sudo systemctl enable --now $UNITS
 }
 
+has_gnome() {
+	command -v gnome-shell >/dev/null
+}
+
+install_gnome_extension() {
+	sudo rm -rf "$GNOME_EXTENSION_DIR"
+	sudo install -Dm644 -t "$GNOME_EXTENSION_DIR" "$HERE"/gnome/extension/*
+	python3 "$HERE/gnome/enable_extension.py"
+	echo "GNOME: extension installed and enabled; log out and back in to load it."
+}
+
+uninstall_gnome_extension() {
+	if [[ -d $GNOME_EXTENSION_DIR ]]; then
+		python3 "$HERE/gnome/enable_extension.py" --disable
+		sudo rm -rf "$GNOME_EXTENSION_DIR"
+	fi
+}
+
 uninstall_island() {
 	sudo python3 "$HERE/howdy/patch_howdy.py" --remove
 	sudo systemctl disable --now $UNITS 2>/dev/null || true
@@ -44,6 +64,7 @@ uninstall_island() {
 
 case ${1:-} in
 --uninstall)
+	uninstall_gnome_extension
 	uninstall_island
 	"$HERE/howdy/install_howdy" --uninstall
 	echo "howdy-island removed and Howdy taken out of PAM."
@@ -51,6 +72,9 @@ case ${1:-} in
 *)
 	"$HERE/howdy/install_howdy"
 	install_island
+	if has_gnome; then
+		install_gnome_extension
+	fi
 	echo "Done. Try it in front of the laptop: sudo -k; sudo true  (empty password, Enter)"
 	;;
 esac

@@ -11,6 +11,7 @@ so you know which way to turn.
 - Runs from boot as a system service, so it is also on the login screen and above the Hyprland lock
   screen.
 - A small C program that talks Wayland directly (`wlr-layer-shell`). No GTK, no Python at runtime.
+- On GNOME, which has no `wlr-layer-shell`, a GNOME Shell extension draws the same island.
 - Leaves your Hyprland and sway configs untouched.
 
 ## Install
@@ -34,11 +35,11 @@ sudo -k; sudo true
 
 ## Where it shows
 
-| | Hyprland | sway, river, niri, labwc, KDE | GNOME |
-| --- | --- | --- | --- |
-| `sudo`, polkit dialogs | yes | yes | no (no `wlr-layer-shell`) |
-| Lock screen | yes, above hyprlock | no | no |
-| Login screen | yes, if the greeter runs on it | yes, if the greeter runs on it | no |
+| | Hyprland | sway, river, niri, labwc | GNOME | KDE Plasma |
+| --- | --- | --- | --- | --- |
+| `sudo`, polkit dialogs | yes | yes | yes, through the extension | should, untested |
+| Lock screen | yes, above hyprlock | no | yes, but GNOME only locks when run from GDM | no |
+| Login screen | yes, if the greeter runs on it | yes, if the greeter runs on it | no (GDM's greeter loads no extensions) | if the greeter runs on a wlroots compositor |
 
 On a laptop it sits on the built-in panel, under the camera. A scan opens it only in the sessions of
 the user being authenticated and on the login screen; everywhere else it stays a notch.
@@ -62,6 +63,10 @@ flowchart LR
   all while still.
 - On Hyprland it adds an `above_lock` layer rule through the IPC socket at runtime, so the config
   file is never edited.
+- On GNOME the service passes the scan on to `/run/user/<uid>/howdy-island.sock`, where the
+  extension of that user listens. The installer puts the extension in
+  `/usr/share/gnome-shell/extensions/` and adds it to your enabled extensions, leaving the others as
+  they are; log out and back in to load it. Tested on GNOME 50.
 
 The service runs as root to reach every user's Wayland socket, inside a strict systemd sandbox: no
 network, read-only system, and only the capabilities needed to open those sockets.
@@ -77,4 +82,5 @@ only root (sudo, polkit, the login screen) reaches the login screen.
 | `install` | the only script to run |
 | `howdy/` | Howdy install script, its feed and the patch that wires it to the island |
 | `island/` | the C service (`make -C island`) |
+| `gnome/` | the GNOME Shell extension and the script that enables it |
 | `system/` | systemd units and the pacman hook |

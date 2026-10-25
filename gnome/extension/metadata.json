@@ -1,0 +1,8 @@
+{
+  "uuid": "howdy-island@julioguillermo.github.io",
+  "name": "Howdy island",
+  "description": "A notch at the top of the screen that opens with Howdy's live IR scan, also on the lock screen.",
+  "url": "https://github.com/JulioGuillermo/howdy_islan",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "session-modes": ["user", "unlock-dialog"]
+}

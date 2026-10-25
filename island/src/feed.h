@@ -13,13 +13,17 @@
  */
 struct feed {
 	int fd;
+	int forward_fd;
 	uid_t scan_sender;
 };
 
 /* Uses the socket systemd passes, else binds a new one at socket_path. */
 bool feed_open(struct feed *feed, const char *socket_path);
 
-/* Applies every pending message to the island. Returns how many there were. */
+/*
+ * Applies every pending message to the island, and passes the accepted ones on to the GNOME
+ * extension of the user being scanned. Returns how many there were.
+ */
 int feed_receive(struct feed *feed, struct island *island);
 
 /* Whether the scan on the island was started by root, which only then may show it on the login screen. */

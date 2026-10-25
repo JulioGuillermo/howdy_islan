@@ -14,6 +14,7 @@
 #define FRAME_HEADER_BYTES 4
 #define VALUES_PER_FACE 4
 #define NO_SENDER ((uid_t)-1)
+#define GNOME_SOCKET_PATTERN "/run/user/%u/howdy-island.sock"
 
 static bool started_by_systemd(void)
 {
@@ -50,8 +51,10 @@ bool feed_open(struct feed *feed, const char *socket_path)
 		feed->fd = bind_socket(socket_path);
 	}
 
+	feed->forward_fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 	int enabled = 1;
-	return feed->fd >= 0 && setsockopt(feed->fd, SOL_SOCKET, SO_PASSCRED, &enabled, sizeof enabled) == 0;
+	return feed->fd >= 0 && feed->forward_fd >= 0 &&
+		setsockopt(feed->fd, SOL_SOCKET, SO_PASSCRED, &enabled, sizeof enabled) == 0;
 }
 
 bool feed_scan_started_by_root(const struct feed *feed)
@@ -95,17 +98,18 @@ static void show_faces(struct island *island, const char *text)
 }
 
 /* A new scan replaces the running one. Root may scan anyone; a user, only themselves. */
-static void begin(struct feed *feed, struct island *island, uid_t sender, const char *text)
+static bool begin(struct feed *feed, struct island *island, uid_t sender, const char *text)
 {
 	char *user;
 	long uid = strtol(text, &user, 10);
 	if (user == text || *user != ' ' || uid < 0)
-		return;
+		return false;
 	if (sender != 0 && sender != (uid_t)uid)
-		return;
+		return false;
 
 	feed->scan_sender = sender;
 	island_begin(island, (uid_t)uid, user + 1);
+	return true;
 }
 
 static void show_scan(struct island *island, const char *text)
@@ -116,16 +120,15 @@ static void show_scan(struct island *island, const char *text)
 		island_scan(island, timeout, threshold);
 }
 
-static void dispatch(struct feed *feed, struct island *island, uid_t sender, char kind, const uint8_t *payload,
+/* Returns whether the message was accepted. */
+static bool dispatch(struct feed *feed, struct island *island, uid_t sender, char kind, const uint8_t *payload,
 	size_t length)
 {
 	const char *text = (const char *)payload;
-	if (kind == 'S') {
-		begin(feed, island, sender, text);
-		return;
-	}
+	if (kind == 'S')
+		return begin(feed, island, sender, text);
 	if (sender != feed->scan_sender)
-		return;
+		return false;
 
 	switch (kind) {
 	case 'R':
@@ -153,6 +156,22 @@ static void dispatch(struct feed *feed, struct island *island, uid_t sender, cha
 		island_finish_enrolment(island, text);
 		break;
 	}
+	return true;
+}
+
+/*
+ * Passes an accepted message on to the GNOME extension of the user being scanned, which listens in
+ * that user's runtime dir. GNOME has no wlr-layer-shell, so the island is drawn there by the shell.
+ */
+static void forward_to_gnome(const struct feed *feed, uid_t uid, const uint8_t *message, size_t length)
+{
+	struct sockaddr_un address = {.sun_family = AF_UNIX};
+	snprintf(address.sun_path, sizeof address.sun_path, GNOME_SOCKET_PATTERN, (unsigned)uid);
+
+	struct stat info;
+	if (lstat(address.sun_path, &info) != 0 || !S_ISSOCK(info.st_mode) || info.st_uid != uid)
+		return;
+	sendto(feed->forward_fd, message, length, MSG_DONTWAIT, (struct sockaddr *)&address, sizeof address);
 }
 
 /* Reads one datagram and who sent it. Returns its length, or -1 when none is left. */
@@ -198,7 +217,8 @@ int feed_receive(struct feed *feed, struct island *island)
 			continue;
 
 		message[length] = '\0';
-		dispatch(feed, island, sender, (char)message[0], message + 1, (size_t)length - 1);
+		if (dispatch(feed, island, sender, (char)message[0], message + 1, (size_t)length - 1))
+			forward_to_gnome(feed, island->user_uid, message, (size_t)length);
 		count++;
 	}
 }
