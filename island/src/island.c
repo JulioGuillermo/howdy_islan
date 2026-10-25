@@ -30,9 +30,9 @@ struct failure_text {
 };
 
 static const struct failure_text FAILURE_TEXTS[] = {
-	{10, "Sin cara registrada", "Añádela con sudo howdy add"},
-	{11, "No te reconozco", "Usa tu contraseña"},
-	{13, "Demasiado oscuro", "Revisa la cámara IR"},
+	{10, "No face enrolled", "Add one with sudo howdy add"},
+	{11, "Not recognised", "Use your password"},
+	{13, "Too dark", "Check the IR camera"},
 };
 
 static double clamp(double value, double low, double high)
@@ -100,7 +100,7 @@ void island_begin(struct island *island, uid_t user_uid, const char *user)
 	island->face_count = 0;
 	island->scan_started_at = 0;
 	island->shake_started_at = 0;
-	set_phase(island, ISLAND_PREPARING, SCAN_COLOR, "Abriendo cámara", "Mira a la pantalla");
+	set_phase(island, ISLAND_PREPARING, SCAN_COLOR, "Opening camera", "Look at the screen");
 	expand(island);
 }
 
@@ -109,7 +109,7 @@ void island_scan(struct island *island, double timeout, double threshold)
 	island->scan_timeout = timeout;
 	island->threshold = threshold;
 	island->scan_started_at = island->now;
-	set_phase(island, ISLAND_SCANNING, SCAN_COLOR, "Escaneando", "Buscando tu cara");
+	set_phase(island, ISLAND_SCANNING, SCAN_COLOR, "Scanning", "Looking for your face");
 	expand(island);
 }
 
@@ -129,14 +129,14 @@ void island_show_faces(struct island *island, const struct face_box *faces, int 
 	island->face_count = count < ISLAND_MAX_FACES ? count : ISLAND_MAX_FACES;
 	memcpy(island->faces, faces, sizeof *faces * island->face_count);
 	if (island->phase == ISLAND_SCANNING && count == 0)
-		snprintf(island->subtitle, sizeof island->subtitle, "Buscando tu cara");
+		snprintf(island->subtitle, sizeof island->subtitle, "Looking for your face");
 	touch(island);
 }
 
 void island_show_certainty(struct island *island, double value)
 {
 	if (island->phase == ISLAND_SCANNING)
-		snprintf(island->subtitle, sizeof island->subtitle, "Distancia %.1f (máx %.1f)", value, island->threshold);
+		snprintf(island->subtitle, sizeof island->subtitle, "Distance %.1f (max %.1f)", value, island->threshold);
 	touch(island);
 }
 
@@ -147,15 +147,15 @@ void island_finish(struct island *island, int exit_code)
 
 	if (exit_code == 0) {
 		char greeting[ISLAND_TEXT_MAX + 8];
-		snprintf(greeting, sizeof greeting, "Hola, %s", island->user);
-		set_phase(island, ISLAND_SUCCESS, SUCCESS_COLOR, "Reconocido", greeting);
+		snprintf(greeting, sizeof greeting, "Hi, %s", island->user);
+		set_phase(island, ISLAND_SUCCESS, SUCCESS_COLOR, "Recognised", greeting);
 		island->collapse_at = island->now + SUCCESS_HOLD_SECONDS;
 		return;
 	}
 
 	char code[32];
-	snprintf(code, sizeof code, "Código %d", exit_code);
-	const char *title = "Error de Howdy";
+	snprintf(code, sizeof code, "Code %d", exit_code);
+	const char *title = "Howdy error";
 	const char *subtitle = code;
 	for (size_t i = 0; i < sizeof FAILURE_TEXTS / sizeof *FAILURE_TEXTS; i++) {
 		if (FAILURE_TEXTS[i].exit_code == exit_code) {
