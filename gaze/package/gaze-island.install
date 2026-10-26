@@ -1,0 +1,17 @@
+# Reloads systemd and D-Bus after install and upgrade, then restarts gazed. PAM is not touched.
+
+reload_services() {
+	[ -d /run/systemd/system ] || return 0
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	dbus-send --system --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+		org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+	systemctl try-restart gazed >/dev/null 2>&1 || true
+}
+
+post_install() {
+	reload_services
+}
+
+post_upgrade() {
+	reload_services
+}

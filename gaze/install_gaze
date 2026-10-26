@@ -3,9 +3,13 @@
 # type the password as usual, or press Enter on an empty prompt to use the face. With an Intel
 # NPU, offers to run Gaze's face models on it.
 #
-#   ./install_gaze              install, configure, enrol face, patch PAM
+#   ./install_gaze              build and install Gaze, configure it, patch PAM
+#   ./install_gaze --enrol      enrol your face, unless one is already there
 #   ./install_gaze --uninstall  remove the PAM lines, the gaze package and the NPU runtime
 #   ./install_gaze --installed  exit 0 when Gaze is installed
+#
+# The package is gaze-island (package/): Gaze's own, with gazed rebuilt so it also sends the IR
+# frames while scanning.
 #
 # PAM_SERVICES overrides which files under /etc/pam.d get the lines.
 
@@ -15,7 +19,7 @@ HERE=$(dirname "$(realpath "$0")")
 source "$HERE/../lib.sh"
 
 GAZE_CONFIG=/etc/gaze/config.toml
-GAZE_PACKAGES="gaze-bin gaze"
+GAZE_PACKAGES="gaze-island gaze-bin gaze"
 PAM_OPTOUT=/etc/gaze/pam.optout
 PAM_LINES="-auth      requisite    pam_faillock.so preauth
 auth       sufficient   pam_unix.so try_first_pass likeauth
@@ -132,6 +136,23 @@ configure() {
 	fi
 }
 
+build_package() {
+	local build_dir
+	build_dir=$(mktemp -d)
+	cp "$HERE"/package/* "$build_dir"
+	echo "== Building gaze-island (compiles gazed, it takes a while)"
+	(cd "$build_dir" && makepkg -si --needed)
+	rm -rf "$build_dir"
+}
+
+enrol() {
+	wait_for_gazed || die "gazed does not answer, see journalctl -u gazed"
+	if ! has_enrolled_face; then
+		echo "== Look at the camera to enrol your face"
+		gaze add-face default
+	fi
+}
+
 is_installed() {
 	local package
 	for package in $GAZE_PACKAGES; do
@@ -157,8 +178,8 @@ install() {
 	grep -qw avx2 /proc/cpuinfo || die "Gaze needs a processor with AVX2"
 
 	echo "# howdy-island adds Gaze to PAM itself" | sudo install -Dm644 /dev/stdin "$PAM_OPTOUT"
-	echo "== Installing gaze-bin from AUR"
-	yay -S --needed gaze-bin v4l-utils
+	sudo pacman -S --needed v4l-utils
+	build_package
 
 	local camera=${1:-$(find_ir_camera)}
 	[[ -n $camera ]] || die "no IR camera found, pass it as argument: ./install_gaze /dev/videoN"
@@ -170,17 +191,7 @@ install() {
 	echo "== Starting gazed (the first start downloads its models)"
 	restart_gazed || die "gazed does not start, see journalctl -u gazed"
 	setup_npu
-
-	if ! has_enrolled_face; then
-		echo "== Look at the camera to enrol your face"
-		gaze add-face default
-	fi
-
 	add_pam_blocks gaze "$PAM_LINES"
-
-	echo
-	echo "Done. Password first; press Enter on an empty prompt to use your face."
-	echo "Check it with: gaze doctor"
 }
 
 [[ $EUID -ne 0 ]] || die "run it as your user, not root (yay refuses root)"
@@ -193,6 +204,9 @@ case ${1:-} in
 --uninstall)
 	sudo -v
 	uninstall
+	;;
+--enrol)
+	enrol
 	;;
 *)
 	sudo -v

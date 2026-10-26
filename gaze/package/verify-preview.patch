@@ -1,0 +1,54 @@
+diff --git a/crates/gazed/src/daemon/verify.rs b/crates/gazed/src/daemon/verify.rs
+index 2f0e4a1..72ff1b9 100644
+--- a/crates/gazed/src/daemon/verify.rs
++++ b/crates/gazed/src/daemon/verify.rs
+@@ -629,6 +629,7 @@ impl AuthDaemon {
+                 );
+ 
+                 let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<VerifyMsg>(10);
++                let (preview_tx, mut preview_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+                 let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                 // Signals that the RGB phase released its camera so the IR thread can take it,
+                 // letting single-function UVC devices (e.g. Logitech Brio) run hybrid verify.
+@@ -883,6 +884,7 @@ impl AuthDaemon {
+                 if let Some(ir_models) = ir_models.clone().filter(|_| run_ir) {
+                     let stop_clone = stop_flag.clone();
+                     let tx = result_tx.clone();
++                    let preview_tx_clone = preview_tx.clone();
+                     let detector_arc = ir_models.detector;
+                     let config_clone = config.clone();
+                     let recognizer_ir_arc = ir_models.recognizer;
+@@ -904,6 +906,7 @@ impl AuthDaemon {
+                     let duress_hold = duress_cfg.effective_hold();
+ 
+                     ir_thread = Some(std::thread::spawn(move || {
++                        let mut preview = PreviewStream::new(preview_tx_clone);
+                         if ir_model && ir_liveness_arc.blocking_lock().is_none() {
+                             let _ = tx.blocking_send(VerifyMsg::Error(
+                                 "The IR anti-spoof model is enabled but unavailable".to_string(),
+@@ -993,6 +996,7 @@ impl AuthDaemon {
+                             }
+ 
+                             let frame = checker.orient(frame);
++                            preview.offer(&frame);
+                             let (status, embed_opt) = {
+                                 let mut recognizer = recognizer_ir_arc.blocking_lock();
+                                 match process_frame_sync(&mut checker, &mut recognizer, &frame, ir_model || duress_enabled) {
+@@ -1116,6 +1120,7 @@ impl AuthDaemon {
+                 }
+ 
+                 drop(result_tx);
++                drop(preview_tx);
+ 
+                 let mut last_emitted_status: Option<CaptureStatus> = None;
+                 let mut suspended = false;
+@@ -1200,6 +1205,9 @@ impl AuthDaemon {
+                                 break;
+                             }
+                         }
++                        Some(jpeg) = preview_rx.recv() => {
++                            let _ = Self::preview_frame(&ctxt, &jpeg).await;
++                        }
+                         msg_opt = result_rx.recv() => {
+                             let Some(msg) = msg_opt else {
+                                 warn!("VerifyStart: all capture threads exited without a result");

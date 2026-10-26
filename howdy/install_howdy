@@ -2,7 +2,8 @@
 # Installs Howdy (face unlock) and adds it to PAM after the password prompt:
 # type the password as usual, or press Enter on an empty prompt to use the face.
 #
-#   ./install_howdy              install, configure, enrol face, patch PAM
+#   ./install_howdy              install, configure, patch PAM
+#   ./install_howdy --enrol      enrol your face, unless one is already there
 #   ./install_howdy --uninstall  remove the PAM lines and the howdy package
 #   ./install_howdy --installed  exit 0 when Howdy is installed
 #
@@ -94,16 +95,14 @@ install() {
 		set_config use_cnn true
 	fi
 
+	add_pam_blocks howdy "$PAM_LINES"
+}
+
+enrol() {
 	if ! sudo test -s "/etc/howdy/models/$USER.dat"; then
 		echo "== Look at the camera to enrol your face"
 		sudo howdy add
 	fi
-
-	add_pam_blocks howdy "$PAM_LINES"
-
-	echo
-	echo "Done. Password first; press Enter on an empty prompt to use your face."
-	echo "Live preview: sudo howdy test   (or howdy-gtk)"
 }
 
 [[ $EUID -ne 0 ]] || die "run it as your user, not root (yay refuses root)"
@@ -116,6 +115,9 @@ case ${1:-} in
 --uninstall)
 	sudo -v
 	uninstall
+	;;
+--enrol)
+	enrol
 	;;
 *)
 	sudo -v

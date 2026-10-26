@@ -1,0 +1,42 @@
+# Gaze as published by Gundu Labs, with gazed rebuilt from the same release plus
+# verify-preview.patch: it also sends the IR camera's frames while scanning a face, which the
+# island shows. Everything else is the official package, unchanged.
+pkgname=gaze-island
+pkgver=0.4.1
+pkgrel=1
+pkgdesc="Gaze face authentication, with the IR preview while scanning (for howdy-island)"
+arch=('x86_64')
+url="https://gaze.gundulabs.com"
+license=('GPL-3.0-or-later')
+depends=('gst-plugin-pipewire' 'gst-plugins-base' 'gst-plugins-good' 'opencv<5.1' 'opencv>=5.0' 'pam' 'tpm2-tss')
+makedepends=('cargo' 'clang' 'pkgconf' 'gstreamer' 'gst-plugins-base-libs' 'openssl')
+provides=("gaze=$pkgver")
+conflicts=('gaze' 'gaze-bin')
+backup=('etc/dbus-1/system.d/com.gundulabs.Gaze.conf' 'etc/gaze/config.toml')
+install=gaze-island.install
+options=('!lto' '!debug')
+source=("gaze-$pkgver-1-x86_64.pkg.tar.zst::https://packages.gundulabs.com/arch/packages/gaze-$pkgver-1-x86_64.pkg.tar.zst"
+	"gaze-$pkgver.tar.gz::https://github.com/GunduLabs/gaze/archive/refs/tags/v$pkgver.tar.gz"
+	'verify-preview.patch')
+noextract=("gaze-$pkgver-1-x86_64.pkg.tar.zst")
+sha256sums=('9ae14fc96772621112179ed53818d4d434bc015f6606a3e05ecc3470b0ff6c25'
+	'5f2d69ed8b5d7c175297feb383618460cffc68ba50eb1d2e10dce37416874c2f'
+	'98abb8f198dc5bb03a3ba6ec41ebf60ab2cad79cfc76f3e247d156dd809b8004')
+
+prepare() {
+	cd "gaze-$pkgver"
+	patch -Np1 -i ../verify-preview.patch
+	cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+	cd "gaze-$pkgver"
+	export OPENCV_PKGCONFIG_NAME=opencv5
+	cargo build --frozen --release -p gazed
+}
+
+package() {
+	bsdtar -xpf "gaze-$pkgver-1-x86_64.pkg.tar.zst" -C "$pkgdir"
+	find "$pkgdir" -maxdepth 1 -type f -name '.*' -delete
+	install -Dm755 "gaze-$pkgver/target/release/gazed" "$pkgdir/usr/bin/gazed"
+}

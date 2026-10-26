@@ -158,7 +158,10 @@ install() {
 	if has_gnome; then
 		install_gnome_extension
 	fi
-	echo "Done. Try it in front of the laptop: sudo -k; sudo true  (empty password, Enter)"
+	"$(backend_script "$backend")" --enrol
+	echo
+	echo "Done. Password first; press Enter on an empty prompt to use your face."
+	echo "Try it in front of the laptop: sudo -k; sudo true"
 }
 
 uninstall() {
