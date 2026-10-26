@@ -116,7 +116,8 @@ install() {
 	echo "== IR camera: $camera"
 
 	set_config device_path "$camera"
-	set_config detection_notice true
+	set_config detection_notice false
+	set_config no_confirmation true
 	if [[ $use_cuda -eq 1 ]]; then
 		set_config use_cnn true
 	fi

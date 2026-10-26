@@ -26,6 +26,9 @@ Arch-based distros (it uses `pacman` and `yay`), with an IR camera.
 It installs `howdy-git` and builds `python-dlib` without CUDA unless there is an NVIDIA GPU, finds
 the IR camera, enrols your face and adds Howdy to `sudo`, `polkit-1` and `system-local-login`.
 The password comes first: type it as usual, or press Enter on an empty prompt to use your face.
+It also turns off Howdy's two text messages (`detection_notice`, `no_confirmation`): greeters that
+only answer the password prompt, such as nwg-hello on greetd, hang on them. The island shows the
+same thing.
 
 Then, in front of the laptop (Howdy does not work over SSH):
 
