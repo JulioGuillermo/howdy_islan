@@ -74,11 +74,16 @@ void island_show_frame(struct island *island, int width, int height, const uint8
 void island_show_faces(struct island *island, const struct face_box *faces, int count);
 void island_show_certainty(struct island *island, double value);
 void island_finish(struct island *island, int exit_code);
+/* A line under the title while working, such as "Come closer". */
+void island_show_hint(struct island *island, const char *hint);
+/* The scan or enrolment stopped without a result (the password was typed instead): close quietly. */
+void island_cancel(struct island *island);
 
 /* howdy add: same frames and faces as a scan, its own progress and result. */
 void island_enrol(struct island *island);
 void island_show_enrolment_progress(struct island *island, double fraction);
-/* reason: "added", or why it failed ("no-face", "multiple-faces", "dark", "black"). */
+/* reason: "added", or why it failed ("no-face", "multiple-faces", "dark", "black", "camera-failed",
+ * "db-failed"). */
 void island_finish_enrolment(struct island *island, const char *reason);
 
 void island_advance(struct island *island, double now);

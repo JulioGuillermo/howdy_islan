@@ -1,0 +1,35 @@
+[Unit]
+Description=Howdy island: passes Gaze's face scans on to the island
+After=dbus.service howdy-island.socket
+Requires=dbus.service
+Wants=howdy-island.socket
+
+[Service]
+ExecStart=/usr/lib/howdy-island/gaze-island-feed
+Restart=always
+RestartSec=2
+
+CapabilityBoundingSet=CAP_SETUID
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

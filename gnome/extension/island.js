@@ -44,6 +44,8 @@ const ENROLMENT_FAILURE_TEXTS = {
     'multiple-faces': ['More than one face', 'Only you, please'],
     'dark': ['Too dark', 'Check the IR camera'],
     'black': ['Camera sees nothing', 'Is the IR emitter on?'],
+    'camera-failed': ['Camera error', 'Check the IR camera'],
+    'db-failed': ['Could not save the face', 'See journalctl -u gazed'],
 };
 
 function clamp(value, low, high) {
@@ -124,6 +126,19 @@ export class Island {
         this._touch();
     }
 
+    /* A line under the title while working, such as "Come closer". */
+    showHint(hint) {
+        if (this._isWorking() && hint !== '')
+            this.subtitle = hint;
+        this._touch();
+    }
+
+    /* The scan or enrolment stopped without a result (the password was typed instead): close quietly. */
+    cancel() {
+        if (this._isWorking())
+            this._collapse();
+    }
+
     finish(exitCode) {
         if (this.phase === Phase.REST)
             return;
@@ -136,7 +151,7 @@ export class Island {
         this._fail(title, subtitle);
     }
 
-    /* reason: "added", or why it failed ("no-face", "multiple-faces", "dark", "black"). */
+    /* reason: "added", or why it failed ("no-face", "multiple-faces", "dark", "black", "camera-failed", "db-failed"). */
     finishEnrolment(reason) {
         if (this.phase === Phase.REST)
             return;

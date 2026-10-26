@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = nwg-hello
+
+[Action]
+Description = Letting nwg-hello answer Gaze's messages (howdy-island)...
+When = PostTransaction
+Exec = /usr/bin/python3 /usr/lib/howdy-island/patch_hooks.py nwg-hello

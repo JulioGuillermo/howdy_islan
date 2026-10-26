@@ -1,36 +1,118 @@
 #!/usr/bin/env bash
-# Installs Howdy (face unlock, through install_howdy) and howdy-island: a notch always at the top of
-# the screen that opens with Howdy's live IR scan. A small C program talking Wayland directly, run as
-# a system service from boot, so it is on every compositor with wlr-layer-shell, the login screen's
-# included (Hyprland, also above hyprlock, sway...). Leaves the Hyprland and sway configs untouched.
+# Installs a face unlock, Howdy or Gaze, and howdy-island: a notch always at the top of the screen
+# that opens with the live face scan. A small C program talking Wayland directly, run as a system
+# service from boot, so it is on every compositor with wlr-layer-shell, the login screen's included
+# (Hyprland, also above hyprlock, sway...). Leaves the Hyprland and sway configs untouched.
 # When GNOME is installed, also a GNOME Shell extension that draws the island there.
 #
-#   ./install              install both
-#   ./install --uninstall  remove the island and Howdy's PAM lines (the howdy package stays)
+#   ./install              asks which face unlock to install
+#   ./install howdy|gaze   installs that one and the island
+#   ./install --uninstall  removes the island and the face unlock installed
+#
+# Only one face unlock at a time: installing one while the other is there offers to remove it first.
 
 set -euo pipefail
 
 HERE=$(dirname "$(realpath "$0")")
+source "$HERE/lib.sh"
+
 LIB_DIR=/usr/lib/howdy-island
-UNITS="howdy-island.socket howdy-island.service"
+ISLAND_UNITS="howdy-island.socket howdy-island.service"
+GAZE_FEED_UNIT=howdy-island-gaze.service
+SYSTEMD_DIR=/usr/lib/systemd/system
+PACMAN_HOOK_DIR=/etc/pacman.d/hooks
 GNOME_EXTENSION_DIR=/usr/share/gnome-shell/extensions/howdy-island@julioguillermo.github.io
 
-install_island() {
-	sudo pacman -S --needed gcc make pkgconf wayland wayland-protocols cairo
+BACKENDS=(howdy gaze)
+declare -A BACKEND_SUMMARY=(
+	[howdy]="Howdy: fast, but a photo of you may unlock it (no liveness check)"
+	[gaze]="Gaze: checks you are alive (rejects photos and screens), keeps faces encrypted with the TPM, can use an Intel NPU"
+)
+
+backend_script() {
+	echo "$HERE/$1/install_$1"
+}
+
+installed_backends() {
+	local backend
+	for backend in "${BACKENDS[@]}"; do
+		if "$(backend_script "$backend")" --installed; then
+			echo "$backend"
+		fi
+	done
+}
+
+choose_backend() {
+	local index
+	echo "Which face unlock?" >&2
+	for index in "${!BACKENDS[@]}"; do
+		echo "  $((index + 1))) ${BACKEND_SUMMARY[${BACKENDS[$index]}]}" >&2
+	done
+	read -r -p "Number: " index </dev/tty
+	[[ $index =~ ^[0-9]+$ && $index -ge 1 && $index -le ${#BACKENDS[@]} ]] || die "no such option: $index"
+	echo "${BACKENDS[$((index - 1))]}"
+}
+
+build_island() {
+	sudo pacman -S --needed gcc make pkgconf wayland wayland-protocols cairo libjpeg-turbo systemd-libs
 	make -C "$HERE/island" clean
 	make -C "$HERE/island"
+}
 
-	sudo systemctl stop $UNITS 2>/dev/null || true
+remove_backend_hooks() {
+	if [[ -f $LIB_DIR/patch_hooks.py ]]; then
+		sudo python3 "$LIB_DIR/patch_hooks.py" howdy --remove || true
+		sudo python3 "$LIB_DIR/patch_hooks.py" nwg-hello --remove || true
+	fi
+	sudo systemctl disable --now "$GAZE_FEED_UNIT" 2>/dev/null || true
+	sudo rm -f "$SYSTEMD_DIR/$GAZE_FEED_UNIT" "$PACMAN_HOOK_DIR/howdy-island.hook" \
+		"$PACMAN_HOOK_DIR/howdy-island-nwg-hello.hook"
+}
+
+install_howdy_feed() {
+	sudo install -Dm644 -t "$LIB_DIR" "$HERE"/howdy/island_feed.py
+	sudo install -Dm644 "$HERE/system/howdy-island.hook" "$PACMAN_HOOK_DIR/howdy-island.hook"
+	sudo python3 "$LIB_DIR/patch_hooks.py" howdy
+}
+
+# nwg-hello hangs on the messages Gaze sends while it scans, so it gets patched to answer them.
+install_gaze_feed() {
+	make -C "$HERE/gaze/feed" clean
+	make -C "$HERE/gaze/feed"
+	sudo install -Dm755 "$HERE/gaze/feed/build/gaze-island-feed" "$LIB_DIR/gaze-island-feed"
+	sudo install -Dm644 -t "$SYSTEMD_DIR" "$HERE/system/$GAZE_FEED_UNIT"
+	sudo install -Dm644 "$HERE/system/howdy-island-nwg-hello.hook" "$PACMAN_HOOK_DIR/howdy-island-nwg-hello.hook"
+	sudo python3 "$LIB_DIR/patch_hooks.py" nwg-hello
+	sudo systemctl daemon-reload
+	sudo systemctl enable --now "$GAZE_FEED_UNIT"
+	sudo systemctl restart "$GAZE_FEED_UNIT"
+}
+
+install_island() {
+	local backend=$1
+	build_island
+
+	sudo systemctl stop $ISLAND_UNITS 2>/dev/null || true
+	remove_backend_hooks
 	sudo rm -rf "$LIB_DIR"
 	sudo install -Dm755 "$HERE/island/build/howdy-island" "$LIB_DIR/howdy-island"
-	sudo install -Dm644 -t "$LIB_DIR" "$HERE"/howdy/*.py
-	sudo install -Dm644 -t /usr/lib/systemd/system "$HERE/system/howdy-island.socket" "$HERE/system/howdy-island.service"
-	sudo install -Dm644 "$HERE/system/howdy-island.hook" /etc/pacman.d/hooks/howdy-island.hook
-
-	sudo python3 "$LIB_DIR/patch_howdy.py"
-
+	sudo install -Dm644 -t "$LIB_DIR" "$HERE/system/patch_hooks.py"
+	sudo install -Dm644 -t "$SYSTEMD_DIR" "$HERE/system/howdy-island.socket" "$HERE/system/howdy-island.service"
 	sudo systemctl daemon-reload
-	sudo systemctl enable --now $UNITS
+	sudo systemctl enable --now $ISLAND_UNITS
+
+	case $backend in
+	howdy) install_howdy_feed ;;
+	gaze) install_gaze_feed ;;
+	esac
+}
+
+uninstall_island() {
+	remove_backend_hooks
+	sudo systemctl disable --now $ISLAND_UNITS 2>/dev/null || true
+	sudo rm -rf "$LIB_DIR"
+	sudo rm -f "$SYSTEMD_DIR/howdy-island.socket" "$SYSTEMD_DIR/howdy-island.service"
+	sudo systemctl daemon-reload
 }
 
 has_gnome() {
@@ -51,30 +133,48 @@ uninstall_gnome_extension() {
 	fi
 }
 
-uninstall_island() {
-	sudo python3 "$HERE/howdy/patch_howdy.py" --remove
-	sudo systemctl disable --now $UNITS 2>/dev/null || true
-	sudo rm -rf "$LIB_DIR"
-	sudo rm -f /usr/lib/systemd/system/howdy-island.socket /usr/lib/systemd/system/howdy-island.service \
-		/etc/pacman.d/hooks/howdy-island.hook
-	sudo systemctl daemon-reload
+# Removes the other face unlock first, when there is one and the user agrees.
+make_room_for() {
+	local backend=$1 other answer
+	for other in $(installed_backends); do
+		[[ $other == "$backend" ]] && continue
+		echo "$other is installed. Only one face unlock can be used at a time."
+		read -r -p "Remove $other and install $backend? [y/N] " answer </dev/tty
+		[[ $answer == [yYsS]* ]] || die "nothing changed"
+		"$(backend_script "$other")" --uninstall
+	done
 }
 
-[[ $EUID -ne 0 ]] || { echo "Run it as your user, not root" >&2; exit 1; }
+install() {
+	local backend=${1:-}
+	if [[ -z $backend ]]; then
+		backend=$(choose_backend)
+	fi
+	[[ " ${BACKENDS[*]} " == *" $backend "* ]] || die "unknown face unlock: $backend (howdy or gaze)"
 
-case ${1:-} in
---uninstall)
-	uninstall_gnome_extension
-	uninstall_island
-	"$HERE/howdy/install_howdy" --uninstall
-	echo "howdy-island removed and Howdy taken out of PAM."
-	;;
-*)
-	"$HERE/howdy/install_howdy"
-	install_island
+	make_room_for "$backend"
+	"$(backend_script "$backend")"
+	install_island "$backend"
 	if has_gnome; then
 		install_gnome_extension
 	fi
 	echo "Done. Try it in front of the laptop: sudo -k; sudo true  (empty password, Enter)"
-	;;
+}
+
+uninstall() {
+	local backends backend
+	backends=$(installed_backends)
+	uninstall_gnome_extension
+	uninstall_island
+	for backend in $backends; do
+		"$(backend_script "$backend")" --uninstall
+	done
+	echo "howdy-island removed${backends:+, and $backends with it}."
+}
+
+[[ $EUID -ne 0 ]] || die "Run it as your user, not root"
+
+case ${1:-} in
+--uninstall) uninstall ;;
+*) install "${1:-}" ;;
 esac

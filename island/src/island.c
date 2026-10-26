@@ -40,6 +40,8 @@ static const struct enrolment_failure_text ENROLMENT_FAILURE_TEXTS[] = {
 	{"multiple-faces", "More than one face", "Only you, please"},
 	{"dark", "Too dark", "Check the IR camera"},
 	{"black", "Camera sees nothing", "Is the IR emitter on?"},
+	{"camera-failed", "Camera error", "Check the IR camera"},
+	{"db-failed", "Could not save the face", "See journalctl -u gazed"},
 };
 
 static const struct failure_text FAILURE_TEXTS[] = {
@@ -164,6 +166,19 @@ void island_show_certainty(struct island *island, double value)
 	if (island->phase == ISLAND_SCANNING)
 		snprintf(island->subtitle, sizeof island->subtitle, "Distance %.1f (max %.1f)", value, island->threshold);
 	touch(island);
+}
+
+void island_show_hint(struct island *island, const char *hint)
+{
+	if (is_working(island) && hint[0] != '\0')
+		snprintf(island->subtitle, sizeof island->subtitle, "%s", hint);
+	touch(island);
+}
+
+void island_cancel(struct island *island)
+{
+	if (is_working(island))
+		collapse(island);
 }
 
 static void succeed(struct island *island, const char *title, const char *subtitle)

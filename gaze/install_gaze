@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# Installs Gaze (face unlock with a liveness check) and adds it to PAM after the password prompt:
+# type the password as usual, or press Enter on an empty prompt to use the face. With an Intel
+# NPU, offers to run Gaze's face models on it.
+#
+#   ./install_gaze              install, configure, enrol face, patch PAM
+#   ./install_gaze --uninstall  remove the PAM lines, the gaze package and the NPU runtime
+#   ./install_gaze --installed  exit 0 when Gaze is installed
+#
+# PAM_SERVICES overrides which files under /etc/pam.d get the lines.
+
+set -euo pipefail
+
+HERE=$(dirname "$(realpath "$0")")
+source "$HERE/../lib.sh"
+
+GAZE_CONFIG=/etc/gaze/config.toml
+GAZE_PACKAGES="gaze-bin gaze"
+PAM_OPTOUT=/etc/gaze/pam.optout
+PAM_LINES="-auth      requisite    pam_faillock.so preauth
+auth       sufficient   pam_unix.so try_first_pass likeauth
+auth       sufficient   pam_gaze.so"
+GAZED_START_SECONDS=120
+
+NPU_WHEEL_URL=https://files.pythonhosted.org/packages/08/07/f225999919f56506b603aaa3ff837ad563ab26f86906ed7fa7e5abcd849e/onnxruntime_openvino-1.24.1-cp313-cp313-manylinux_2_28_x86_64.whl
+NPU_WHEEL_SHA256=2c3bb73e68ac27f4891af8a595c1faf574ec68b772e6583c90a0b997a1822782
+NPU_RUNTIME_DIR=/opt/onnxruntime-openvino
+GAZE_OPENVINO_DIR=/usr/lib/gaze/runtimes/openvino
+
+ask() {
+	local answer
+	read -r -p "$1 [y/N] " answer </dev/tty
+	[[ $answer == [yYsS]* ]]
+}
+
+# Sets a key of /etc/gaze/config.toml, also when it is still commented out. Only for keys whose
+# name appears once in the file.
+set_config() {
+	local key=$1 value=$2
+	sudo sed -i -E "0,/^#? ?$key = .*/s||$key = $value|" "$GAZE_CONFIG"
+}
+
+gazed_answers() {
+	busctl --timeout=2 call com.gundulabs.Gaze /com/gundulabs/Gaze com.gundulabs.Gaze IsCameraAvailable >/dev/null 2>&1
+}
+
+wait_for_gazed() {
+	local second
+	for ((second = 0; second < GAZED_START_SECONDS; second++)); do
+		gazed_answers && return 0
+		sleep 1
+	done
+	return 1
+}
+
+restart_gazed() {
+	sudo systemctl restart gazed
+	wait_for_gazed
+}
+
+has_enrolled_face() {
+	busctl call com.gundulabs.Gaze /com/gundulabs/Gaze com.gundulabs.Gaze HasEnrolledFaces s "$USER" 2>/dev/null |
+		grep -q true
+}
+
+has_intel_npu() {
+	local device
+	for device in /sys/class/accel/accel*; do
+		[[ $(basename "$(readlink -f "$device/device/driver")") == intel_vpu ]] && return 0
+	done
+	return 1
+}
+
+# ONNX Runtime with OpenVINO, from Intel's Python wheel: it is the only Linux build published, and
+# its libraries find each other next to themselves, so Python is not needed to use them.
+install_npu_runtime() {
+	local wheel
+	wheel=$(mktemp --suffix=.whl)
+	curl -fL --progress-bar -o "$wheel" "$NPU_WHEEL_URL"
+	echo "$NPU_WHEEL_SHA256  $wheel" | sha256sum -c --quiet
+
+	local unpacked
+	unpacked=$(mktemp -d)
+	bsdtar -xf "$wheel" -C "$unpacked" 'onnxruntime/capi/*.so*' onnxruntime/LICENSE
+	rm "$unpacked"/onnxruntime/capi/onnxruntime_pybind11_state*.so
+
+	sudo rm -rf "$NPU_RUNTIME_DIR"
+	sudo install -d "$NPU_RUNTIME_DIR/lib"
+	sudo install -m 755 -t "$NPU_RUNTIME_DIR/lib" "$unpacked"/onnxruntime/capi/*
+	sudo install -m 644 "$unpacked/onnxruntime/LICENSE" "$NPU_RUNTIME_DIR/LICENSE"
+	sudo install -d "$GAZE_OPENVINO_DIR"
+	sudo ln -sf "$(ls "$NPU_RUNTIME_DIR"/lib/libonnxruntime.so.*)" "$GAZE_OPENVINO_DIR/libonnxruntime.so"
+	rm -rf "$wheel" "$unpacked"
+}
+
+remove_npu_runtime() {
+	sudo rm -rf "$NPU_RUNTIME_DIR" "$GAZE_OPENVINO_DIR"
+}
+
+use_cpu() {
+	set_config execution_provider '"cpu"'
+	set_config device '"cpu"'
+}
+
+# Gaze loads its models again after a restart from a compiled cache, so it is started twice.
+setup_npu() {
+	has_intel_npu || return 0
+	ask "== An Intel NPU is here. Run the face models on it (downloads 85 MB)?" || return 0
+
+	yay -S --needed intel-npu-driver level-zero-loader
+	install_npu_runtime
+	set_config execution_provider '"openvino"'
+	set_config device '"npu"'
+	if restart_gazed && restart_gazed; then
+		echo "== Gaze runs on the NPU"
+		return 0
+	fi
+
+	echo "== Gaze did not start on the NPU within ${GAZED_START_SECONDS}s: back to the processor"
+	use_cpu
+	remove_npu_runtime
+	restart_gazed || die "gazed does not start, see journalctl -u gazed"
+}
+
+configure() {
+	local camera=$1
+	set_config ir "\"$camera\""
+	set_config ir_model true
+	if [[ ! -e /dev/tpmrm0 ]]; then
+		echo "== No TPM: the enrolled faces are kept unencrypted"
+		set_config encrypt_templates false
+	fi
+}
+
+is_installed() {
+	local package
+	for package in $GAZE_PACKAGES; do
+		is_package_installed "$package" && return 0
+	done
+	has_pam_block gaze
+}
+
+uninstall() {
+	remove_pam_blocks gaze
+	sudo systemctl disable --now gazed 2>/dev/null || true
+	remove_npu_runtime
+	local package
+	for package in $GAZE_PACKAGES; do
+		if is_package_installed "$package"; then
+			sudo pacman -Rns "$package"
+		fi
+	done
+	sudo rm -f "$PAM_OPTOUT"
+}
+
+install() {
+	grep -qw avx2 /proc/cpuinfo || die "Gaze needs a processor with AVX2"
+
+	echo "# howdy-island adds Gaze to PAM itself" | sudo install -Dm644 /dev/stdin "$PAM_OPTOUT"
+	echo "== Installing gaze-bin from AUR"
+	yay -S --needed gaze-bin v4l-utils
+
+	local camera=${1:-$(find_ir_camera)}
+	[[ -n $camera ]] || die "no IR camera found, pass it as argument: ./install_gaze /dev/videoN"
+	echo "== IR camera: $camera"
+	configure "$camera"
+
+	use_cpu
+	sudo systemctl enable gazed
+	echo "== Starting gazed (the first start downloads its models)"
+	restart_gazed || die "gazed does not start, see journalctl -u gazed"
+	setup_npu
+
+	if ! has_enrolled_face; then
+		echo "== Look at the camera to enrol your face"
+		gaze add-face default
+	fi
+
+	add_pam_blocks gaze "$PAM_LINES"
+
+	echo
+	echo "Done. Password first; press Enter on an empty prompt to use your face."
+	echo "Check it with: gaze doctor"
+}
+
+[[ $EUID -ne 0 ]] || die "run it as your user, not root (yay refuses root)"
+
+case ${1:-} in
+--installed)
+	is_installed
+	exit
+	;;
+--uninstall)
+	sudo -v
+	uninstall
+	;;
+*)
+	sudo -v
+	install "${1:-}"
+	;;
+esac

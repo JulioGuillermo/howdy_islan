@@ -155,6 +155,12 @@ static bool dispatch(struct feed *feed, struct island *island, uid_t sender, cha
 	case 'A':
 		island_finish_enrolment(island, text);
 		break;
+	case 'H':
+		island_show_hint(island, text);
+		break;
+	case 'X':
+		island_cancel(island);
+		break;
 	}
 	return true;
 }

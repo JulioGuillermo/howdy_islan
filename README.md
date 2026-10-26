@@ -1,8 +1,8 @@
 # howdy-island
 
-A notch at the top of the screen that opens while [Howdy](https://github.com/boltgolt/howdy) scans
-your face, to log you in or to enrol it with `howdy add`, showing what the IR camera sees, mirrored
-so you know which way to turn.
+A notch at the top of the screen that opens while your face is scanned, to log you in or to enrol
+it, showing what the IR camera sees, mirrored so you know which way to turn. It works with either of
+two face unlocks: [Howdy](https://github.com/boltgolt/howdy) or [Gaze](https://github.com/GunduLabs/gaze).
 
 ![howdy-island at rest, scanning, recognised and failing](docs/preview.png)
 
@@ -19,18 +19,36 @@ so you know which way to turn.
 Arch-based distros (it uses `pacman` and `yay`), with an IR camera.
 
 ```bash
-./install              # Howdy, its PAM lines and the island
-./install --uninstall  # removes the island and the PAM lines (the howdy package stays)
+./install              # asks which face unlock: Howdy or Gaze
+./install gaze         # or say it: howdy | gaze
+./install --uninstall  # removes the island and the face unlock, package included
 ```
 
-It installs `howdy-git` and builds `python-dlib` without CUDA unless there is an NVIDIA GPU, finds
-the IR camera, enrols your face and adds Howdy to `sudo`, `polkit-1` and `system-local-login`.
-The password comes first: type it as usual, or press Enter on an empty prompt to use your face.
-It also turns off Howdy's two text messages (`detection_notice`, `no_confirmation`): greeters that
-only answer the password prompt, such as nwg-hello on greetd, hang on them. The island shows the
-same thing.
+| | Howdy | Gaze |
+| --- | --- | --- |
+| A photo or a screen of you | may unlock it | rejected (liveness models on the RGB and IR images) |
+| Enrolled faces | plain files | encrypted with the TPM |
+| Runs on | dlib, built here (CUDA with an NVIDIA GPU) | ONNX Runtime; an Intel NPU if you say yes |
+| The island shows the camera | while scanning and enrolling | only while enrolling (Gaze sends no frames while scanning) |
 
-Then, in front of the laptop (Howdy does not work over SSH):
+Only one can be installed at a time. Installing one while the other is there asks to remove the
+other first.
+
+Both are added to `sudo`, `polkit-1` and `system-local-login` (which also covers the lock screens and
+greetd) after the password: type it as usual, or press Enter on an empty prompt to use your face.
+The installer finds the IR camera and enrols your face.
+
+- **Howdy**: installs `howdy-git` and turns off its two text messages (`detection_notice`,
+  `no_confirmation`): greeters that only answer the password prompt, such as nwg-hello on greetd,
+  hang on them.
+- **Gaze**: installs `gaze-bin`, sets the IR camera, turns on its IR liveness model and starts
+  `gazed`. Gaze's text messages cannot be turned off, so nwg-hello, when installed, gets two lines
+  that answer them (a pacman hook adds them again after each nwg-hello upgrade).
+  With an Intel NPU it offers to download ONNX Runtime with OpenVINO (Intel's `onnxruntime-openvino`
+  wheel, checked against its SHA-256) to `/opt/onnxruntime-openvino` and run the models there. If
+  `gazed` does not start on it, it goes back to the processor.
+
+Then, in front of the laptop (face unlock does not work over SSH):
 
 ```bash
 sudo -k; sudo true
@@ -52,15 +70,22 @@ the user being authenticated and on the login screen; everywhere else it stays a
 ```mermaid
 flowchart LR
   A[sudo / polkit / login] --> B[Howdy, root]
+  A --> G[gazed, over D-Bus]
+  G -- D-Bus signals --> F[gaze-island-feed]
   B -- frames and status --> C["/run/howdy-island/island.sock"]
+  F -- same messages --> C
   C --> D[howdy-island service]
   D --> E[every Wayland session in /run/user]
 ```
 
-- `howdy/patch_howdy.py` adds a few marked lines to Howdy's `compare.py` (authentication) and
-  `cli/add.py` (`howdy add`) that send each analysed frame, the face boxes and the result to the
-  socket. A pacman hook adds them again after every
-  Howdy upgrade. Without the service listening, Howdy behaves as usual.
+- **Howdy**: `system/patch_hooks.py howdy` adds a few marked lines to Howdy's `compare.py`
+  (authentication) and `cli/add.py` (`howdy add`) that send each analysed frame, the face boxes and
+  the result to the socket. A pacman hook adds them again after every Howdy upgrade. Without the
+  service listening, Howdy behaves as usual.
+- **Gaze**: Gaze is a compiled program with no place for such lines, so `gaze/feed` is a small C
+  service (`howdy-island-gaze.service`) that watches Gaze's D-Bus traffic as a bus monitor: who
+  claims the daemon and for which user, then the face hints, the enrolment frames and the result. It
+  sends them to the socket as the user Gaze authenticates for, so the island applies the same rules.
 - `island/` is the service. It watches `/run/user/*` for Wayland sockets, connects to each
   compositor and draws the notch with cairo, at the screen's refresh rate while it moves and not at
   all while still.
@@ -83,7 +108,9 @@ only root (sudo, polkit, the login screen) reaches the login screen.
 | Path | What |
 | --- | --- |
 | `install` | the only script to run |
-| `howdy/` | Howdy install script, its feed and the patch that wires it to the island |
+| `lib.sh` | shell helpers the install scripts share (IR camera, PAM lines) |
+| `howdy/` | Howdy install script and its feed |
+| `gaze/` | Gaze install script and its feed (`make -C gaze/feed`) |
 | `island/` | the C service (`make -C island`) |
 | `gnome/` | the GNOME Shell extension and the script that enables it |
-| `system/` | systemd units and the pacman hook |
+| `system/` | systemd units, pacman hooks and the line patcher they run |

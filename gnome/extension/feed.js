@@ -67,6 +67,12 @@ function apply(island, kind, payload) {
     case 'A':
         island.finishEnrolment(text);
         break;
+    case 'H':
+        island.showHint(text);
+        break;
+    case 'X':
+        island.cancel();
+        break;
     }
 }
 

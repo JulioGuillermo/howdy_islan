@@ -1,11 +1,12 @@
 """Sends Howdy's scan, or howdy add's enrolment, to the howdy-island system service.
 
-Called from the hooks that patch_howdy.py adds to Howdy's compare.py and cli/add.py. Never raises:
-without the service listening, every call is a no-op and Howdy carries on as usual.
+Called from the hooks that system/patch_hooks.py adds to Howdy's compare.py and cli/add.py. Never
+raises: without the service listening, every call is a no-op and Howdy carries on as usual.
 
 One datagram per message, a letter then its data: S uid user, R timeout threshold, G gray frame
 (width and height as little-endian 16-bit numbers, then the pixels), D face boxes (4 fractions
-each), C certainty, E exit code. Enrolment: N start, P progress fraction, A result.
+each), C certainty, E exit code. Enrolment: N start, P progress fraction, A result. The Gaze feed
+(gaze/feed) also sends H, a hint line, and X, cancelled.
 """
 import os
 import pwd

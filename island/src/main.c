@@ -1,7 +1,7 @@
 /*
  * howdy-island: a notch always at the top of every Wayland session on this machine, the login
- * screen's included, that opens with Howdy's live IR scan. A scan opens it only in the sessions of
- * the user being authenticated and on the login screen; elsewhere it stays at rest.
+ * screen's included, that opens with the live face scan (Howdy or Gaze). A scan opens it only in
+ * the sessions of the user being authenticated and on the login screen; elsewhere it stays at rest.
  */
 #include <errno.h>
 #include <limits.h>
