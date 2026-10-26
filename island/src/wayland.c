@@ -243,13 +243,13 @@ static bool can_switch_layer(const struct display *display)
 	return display->layer_shell_version >= LAYER_SWITCH_VERSION;
 }
 
-static struct island_surface *surface_create(struct display *display, struct output *output)
+static struct island_surface *surface_create(struct display *display, struct output *output, bool raised)
 {
 	struct island_surface *surface = calloc(1, sizeof *surface);
 	surface->display = display;
 	surface->output = output;
 	surface->integer_scale = 1;
-	surface->raised = !can_switch_layer(display);
+	surface->raised = raised || !can_switch_layer(display);
 
 	surface->wl_surface = wl_compositor_create_surface(display->compositor);
 	if (display->compositor_version >= WANTED_COMPOSITOR_VERSION)
@@ -304,13 +304,30 @@ static void buffer_size(const struct island_surface *surface, int *width, int *h
 	*height = RENDER_CANVAS_HEIGHT * surface->integer_scale;
 }
 
-static void update_layer(struct island_surface *surface, bool raised)
+static void lower(struct island_surface *surface)
 {
-	if (surface->raised == raised || !can_switch_layer(surface->display))
+	if (!surface->raised || !can_switch_layer(surface->display))
 		return;
-	uint32_t layer = raised ? ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY : ZWLR_LAYER_SHELL_V1_LAYER_TOP;
-	zwlr_layer_surface_v1_set_layer(surface->layer_surface, layer);
-	surface->raised = raised;
+	zwlr_layer_surface_v1_set_layer(surface->layer_surface, ZWLR_LAYER_SHELL_V1_LAYER_TOP);
+	surface->raised = false;
+}
+
+/*
+ * Moving a surface to the overlay layer does not put it above the overlay surfaces already there,
+ * like a greeter covering the whole screen. A new overlay surface goes on top of them, so the island
+ * is created again each time it opens.
+ */
+static void raise_above_everything(struct island_surface *surface)
+{
+	struct display *display = surface->display;
+	struct output *output = surface->output;
+	surface_destroy(surface);
+
+	struct island_surface *raised = surface_create(display, output, true);
+	if (output)
+		output->surface = raised;
+	else
+		display->unassigned_surface = raised;
 }
 
 static void surface_render(struct island_surface *surface, const struct island *island)
@@ -333,7 +350,8 @@ static void surface_render(struct island_surface *surface, const struct island *
 	cairo_destroy(cr);
 	cairo_surface_flush(buffer->cairo_surface);
 
-	update_layer(surface, island_is_raised(island));
+	if (!island_is_raised(island))
+		lower(surface);
 	if (surface->viewport) {
 		wp_viewport_set_destination(surface->viewport, RENDER_CANVAS_WIDTH, RENDER_CANVAS_HEIGHT);
 		wl_surface_set_buffer_scale(surface->wl_surface, 1);
@@ -379,7 +397,7 @@ static void reconcile_surfaces(struct display *display)
 	wl_list_for_each(output, &display->outputs, link) {
 		bool wanted = is_internal_panel(output);
 		if (wanted && !output->surface) {
-			output->surface = surface_create(display, output);
+			output->surface = surface_create(display, output, false);
 		} else if (!wanted && output->surface) {
 			surface_destroy(output->surface);
 			output->surface = NULL;
@@ -387,7 +405,7 @@ static void reconcile_surfaces(struct display *display)
 	}
 
 	if (!has_internal_panel && !display->unassigned_surface) {
-		display->unassigned_surface = surface_create(display, NULL);
+		display->unassigned_surface = surface_create(display, NULL, false);
 	} else if (has_internal_panel && display->unassigned_surface) {
 		surface_destroy(display->unassigned_surface);
 		display->unassigned_surface = NULL;
@@ -593,6 +611,11 @@ void display_mark_dirty(struct display *display)
 void display_render(struct display *display, const struct island *island)
 {
 	struct island_surface *surface;
-	wl_list_for_each(surface, &display->surfaces, link)
-		surface_render(surface, island);
+	struct island_surface *next;
+	wl_list_for_each_safe(surface, next, &display->surfaces, link) {
+		if (island_is_raised(island) && !surface->raised)
+			raise_above_everything(surface);
+		else
+			surface_render(surface, island);
+	}
 }
