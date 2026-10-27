@@ -35,14 +35,14 @@ GAZED_DROPIN_DIR=/etc/systemd/system/gazed.service.d
 NPU_CACHE_DROPIN=$GAZED_DROPIN_DIR/npu-cache.conf
 ON_DEMAND_DROPIN=$GAZED_DROPIN_DIR/on-demand.conf
 
-# Prints the whole number of minutes typed, or the default on an empty answer.
-ask_minutes() {
+# Prints the whole number of seconds typed, or the default on an empty answer.
+ask_seconds() {
 	local question=$1 default=$2 answer
 	while true; do
 		read -r -p "$question [$default] " answer </dev/tty
 		answer=${answer:-$default}
 		[[ $answer =~ ^[0-9]+$ ]] && break
-		echo "   Type a number of minutes" >/dev/tty
+		echo "   Type a number of seconds" >/dev/tty
 	done
 	echo "$answer"
 }
@@ -179,11 +179,11 @@ setup_start_mode() {
 		return 0
 	fi
 
-	local idle_minutes=0
+	local idle_seconds=0
 	if ask "== Keep it running a while after each use, so the next one is instant?"; then
-		idle_minutes=$(ask_minutes "   For how many minutes?" 5)
+		idle_seconds=$(ask_seconds "   For how many seconds?" 300)
 	fi
-	write_gazed_dropin "$ON_DEMAND_DROPIN" "Environment=GAZED_IDLE_EXIT_SECONDS=$((idle_minutes * 60))"
+	write_gazed_dropin "$ON_DEMAND_DROPIN" "Environment=GAZED_IDLE_EXIT_SECONDS=$idle_seconds"
 	sudo systemctl disable gazed
 	if runs_on_npu && ask "== Keep the NPU's compiled models in RAM while gazed is stopped (12 MB; otherwise each start takes about 1 s more)?"; then
 		place_npu_cache kept
