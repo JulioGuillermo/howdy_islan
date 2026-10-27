@@ -213,6 +213,20 @@ static void show_preview(struct gaze_watch *watch, sd_bus_message *signal)
 	island_link_send(&watch->island, 'G', frame, FRAME_HEADER_BYTES + pixels);
 }
 
+/* The face box comes as x, y, width and height fractions; the island's 'D' message takes the same. */
+static void show_face_box(struct gaze_watch *watch, sd_bus_message *signal)
+{
+	const double *values = NULL;
+	size_t length = 0;
+	if (sd_bus_message_read_array(signal, 'd', (const void **)&values, &length) < 0)
+		return;
+
+	char text[64] = "";
+	if (length == 4 * sizeof *values)
+		snprintf(text, sizeof text, "%.4f %.4f %.4f %.4f", values[0], values[1], values[2], values[3]);
+	island_link_send_text(&watch->island, 'D', text);
+}
+
 static void handle_signal(struct gaze_watch *watch, sd_bus_message *signal, const char *member, double now)
 {
 	if (strcmp(member, "FaceStatus") == 0) {
@@ -221,6 +235,8 @@ static void handle_signal(struct gaze_watch *watch, sd_bus_message *signal, cons
 			show_hint(watch, lookup(FACE_HINTS, COUNT(FACE_HINTS), status), now);
 	} else if (strcmp(member, "PreviewFrame") == 0) {
 		show_preview(watch, signal);
+	} else if (strcmp(member, "PreviewFaces") == 0) {
+		show_face_box(watch, signal);
 	} else if (strcmp(member, "VerifyStatus") == 0 && watch->activity == GAZE_VERIFYING) {
 		show_verify_result(watch, signal);
 	} else if (strcmp(member, "EnrollStatus") == 0 && watch->activity == GAZE_ENROLLING) {

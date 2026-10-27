@@ -21,7 +21,7 @@ source=("gaze-$pkgver-1-x86_64.pkg.tar.zst::https://packages.gundulabs.com/arch/
 noextract=("gaze-$pkgver-1-x86_64.pkg.tar.zst")
 sha256sums=('9ae14fc96772621112179ed53818d4d434bc015f6606a3e05ecc3470b0ff6c25'
 	'5f2d69ed8b5d7c175297feb383618460cffc68ba50eb1d2e10dce37416874c2f'
-	'98abb8f198dc5bb03a3ba6ec41ebf60ab2cad79cfc76f3e247d156dd809b8004')
+	'5df7bb781dbf4a0e3cc14b3f6557ce84627d841b1486a215d0fb82f9abcb3de8')
 
 prepare() {
 	cd "gaze-$pkgver"
