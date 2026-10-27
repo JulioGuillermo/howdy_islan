@@ -25,13 +25,12 @@ PAM_OPTOUT=/etc/gaze/pam.optout
 PAM_LINES="-auth      requisite    pam_faillock.so preauth
 auth       sufficient   pam_unix.so try_first_pass likeauth
 auth       sufficient   pam_gaze.so"
-# pam_gaze only talks to a gazed already running, so on demand PAM wakes it: without waiting
-# before the password prompt (it starts while the password is typed), then waiting before the face.
-GAZED_PING="/usr/bin/busctl call com.gundulabs.Gaze /com/gundulabs/Gaze org.freedesktop.DBus.Peer Ping"
+# pam_gaze only talks to a gazed already running, so on demand PAM starts it, and waits for it,
+# once the password was left empty or wrong: a right password never starts it.
+GAZED_PING="/usr/bin/busctl --timeout=10 call com.gundulabs.Gaze /com/gundulabs/Gaze org.freedesktop.DBus.Peer Ping"
 ON_DEMAND_PAM_LINES="-auth      requisite    pam_faillock.so preauth
-auth       optional     pam_exec.so quiet ${GAZED_PING/call/--expect-reply=no call}
 auth       sufficient   pam_unix.so try_first_pass likeauth
-auth       optional     pam_exec.so quiet ${GAZED_PING/call/--timeout=10 call}
+auth       optional     pam_exec.so quiet $GAZED_PING
 auth       sufficient   pam_gaze.so"
 GAZED_START_SECONDS=120
 
