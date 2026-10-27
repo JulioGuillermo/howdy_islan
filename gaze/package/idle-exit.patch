@@ -1,0 +1,79 @@
+diff --git a/crates/gazed/src/main.rs b/crates/gazed/src/main.rs
+index 388df02..cedc61b 100644
+--- a/crates/gazed/src/main.rs
++++ b/crates/gazed/src/main.rs
+@@ -330,6 +330,13 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
+     let pam_internal: daemon::PamInternalSets =
+         Arc::new(Mutex::new(std::collections::HashMap::new()));
+     let camera_lease: daemon::CameraLease = Arc::new(Mutex::new(()));
++    let benchmark_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
++    let idle = wait_until_idle(
++        idle_exit_after(),
++        claim_state.clone(),
++        camera_lease.clone(),
++        benchmark_running.clone(),
++    );
+ 
+     let daemon = AuthDaemon {
+         models: Arc::new(std::sync::Mutex::new(sessions)),
+@@ -347,7 +354,7 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
+         resume_seen: resume_seen.clone(),
+         sleeping,
+         lock_epochs: lock_epochs.clone(),
+-        benchmark_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
++        benchmark_running,
+         rt_handle: tokio::runtime::Handle::current(),
+     };
+ 
+@@ -380,6 +387,10 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
+ 
+     info!("Gaze Daemon listening on System Bus");
+     let (watcher, result) = tokio::select! {
++        () = idle => {
++            info!("Idle, exiting until the next request starts gazed again");
++            return Ok(());
++        }
+         result = resume_watcher => ("PrepareForSleep watcher", result),
+         result = lock_watcher => ("session LockedHint watcher", result),
+         result = claim_watcher => ("NameOwnerChanged watcher", result),
+@@ -391,6 +402,40 @@ async fn run(mut config: Config) -> anyhow::Result<()> {
+     }
+ }
+ 
++const IDLE_EXIT_VARIABLE: &str = "GAZED_IDLE_EXIT_SECONDS";
++const IDLE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
++
++/// How long gazed may sit idle before exiting, from GAZED_IDLE_EXIT_SECONDS: 0 exits as soon as it
++/// is idle; unset keeps it running.
++fn idle_exit_after() -> Option<std::time::Duration> {
++    let seconds: u64 = std::env::var(IDLE_EXIT_VARIABLE).ok()?.parse().ok()?;
++    Some(std::time::Duration::from_secs(seconds))
++}
++
++/// Returns once nothing has been claimed, held the camera or run a benchmark for `limit`.
++async fn wait_until_idle(
++    limit: Option<std::time::Duration>,
++    claim_state: daemon::ClaimStateHandle,
++    camera_lease: daemon::CameraLease,
++    benchmark_running: Arc<std::sync::atomic::AtomicBool>,
++) {
++    let Some(limit) = limit else {
++        return std::future::pending().await;
++    };
++    let mut idle_since = std::time::Instant::now();
++    loop {
++        tokio::time::sleep(IDLE_CHECK_INTERVAL).await;
++        let claimed = claim_state.try_lock().map_or(true, |claim| claim.is_some());
++        let camera_in_use = camera_lease.try_lock().is_err();
++        let benchmarking = benchmark_running.load(std::sync::atomic::Ordering::Relaxed);
++        if claimed || camera_in_use || benchmarking {
++            idle_since = std::time::Instant::now();
++        } else if idle_since.elapsed() >= limit {
++            return;
++        }
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::ir_misconfig_diagnostic;

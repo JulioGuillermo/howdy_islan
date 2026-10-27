@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs Gaze (face unlock with a liveness check) and adds it to PAM after the password prompt:
-# type the password as usual, or press Enter on an empty prompt to use the face. With an Intel
-# NPU, offers to run Gaze's face models on it.
+# type the password as usual, or press Enter on an empty prompt to use the face. Asks where the
+# face models run (the processor, or an Intel NPU when there is one) and whether gazed stays
+# running or starts only when needed.
 #
 #   ./install_gaze              build and install Gaze, configure it, patch PAM
 #   ./install_gaze --enrol      enrol your face, unless one is already there
@@ -9,7 +10,7 @@
 #   ./install_gaze --installed  exit 0 when Gaze is installed
 #
 # The package is gaze-island (package/): Gaze's own, with gazed rebuilt so it also sends the IR
-# frames while scanning.
+# frames while scanning and can exit when idle.
 #
 # PAM_SERVICES overrides which files under /etc/pam.d get the lines.
 
@@ -30,7 +31,21 @@ NPU_WHEEL_URL=https://files.pythonhosted.org/packages/08/07/f225999919f56506b603
 NPU_WHEEL_SHA256=2c3bb73e68ac27f4891af8a595c1faf574ec68b772e6583c90a0b997a1822782
 NPU_RUNTIME_DIR=/opt/onnxruntime-openvino
 GAZE_OPENVINO_DIR=/usr/lib/gaze/runtimes/openvino
-NPU_DROPIN=/etc/systemd/system/gazed.service.d/npu-cache-in-ram.conf
+GAZED_DROPIN_DIR=/etc/systemd/system/gazed.service.d
+NPU_CACHE_DROPIN=$GAZED_DROPIN_DIR/npu-cache.conf
+ON_DEMAND_DROPIN=$GAZED_DROPIN_DIR/on-demand.conf
+
+# Prints the whole number of minutes typed, or the default on an empty answer.
+ask_minutes() {
+	local question=$1 default=$2 answer
+	while true; do
+		read -r -p "$question [$default] " answer </dev/tty
+		answer=${answer:-$default}
+		[[ $answer =~ ^[0-9]+$ ]] && break
+		echo "   Type a number of minutes" >/dev/tty
+	done
+	echo "$answer"
+}
 
 ask() {
 	local answer
@@ -98,17 +113,36 @@ install_npu_runtime() {
 	rm -rf "$wheel" "$unpacked"
 }
 
-remove_npu_runtime() {
-	sudo rm -rf "$NPU_RUNTIME_DIR" "$GAZE_OPENVINO_DIR"
-	sudo rm -f "$NPU_DROPIN"
+write_gazed_dropin() {
+	local path=$1 settings=$2
+	printf '[Service]\n%s\n' "$settings" | sudo install -Dm644 /dev/stdin "$path"
 	sudo systemctl daemon-reload
 }
 
-# Gives gazed its compiled-model cache in RAM; gazed rebuilds it (about 2 s) each time it starts.
-keep_npu_cache_in_ram() {
-	printf '[Service]\nTemporaryFileSystem=/var/cache/gaze/inference:mode=0700\n' |
-		sudo install -Dm644 /dev/stdin "$NPU_DROPIN"
+remove_gazed_dropin() {
+	sudo rm -f "$1"
 	sudo systemctl daemon-reload
+}
+
+remove_npu_runtime() {
+	sudo rm -rf "$NPU_RUNTIME_DIR" "$GAZE_OPENVINO_DIR"
+	remove_gazed_dropin "$NPU_CACHE_DROPIN"
+}
+
+# The models compiled for the NPU are kept in RAM, never on disk: there the NPU driver can hang
+# pinning them. "each-start" compiles them again every time gazed starts (about 2 s); "kept" holds
+# them in /run between starts (12 MB).
+place_npu_cache() {
+	if [[ $1 == kept ]]; then
+		write_gazed_dropin "$NPU_CACHE_DROPIN" "RuntimeDirectory=gaze/npu-cache
+BindPaths=/run/gaze/npu-cache:/var/cache/gaze/inference"
+	else
+		write_gazed_dropin "$NPU_CACHE_DROPIN" "TemporaryFileSystem=/var/cache/gaze/inference:mode=0700"
+	fi
+}
+
+runs_on_npu() {
+	grep -q '^device = "npu"' "$GAZE_CONFIG"
 }
 
 use_cpu() {
@@ -118,11 +152,11 @@ use_cpu() {
 
 setup_npu() {
 	has_intel_npu || return 0
-	ask "== An Intel NPU is here. Run the face models on it (downloads 85 MB)?" || return 0
+	ask "== An Intel NPU is here. Run the face models on it instead of the processor (downloads 85 MB, gazed takes about 230 MB of RAM instead of 110 MB)?" || return 0
 
 	yay -S --needed intel-npu-driver level-zero-loader
 	install_npu_runtime
-	keep_npu_cache_in_ram
+	place_npu_cache each-start
 	set_config execution_provider '"openvino"'
 	set_config device '"npu"'
 	if restart_gazed; then
@@ -133,6 +167,27 @@ setup_npu() {
 	echo "== Gaze did not start on the NPU within ${GAZED_START_SECONDS}s: back to the processor"
 	use_cpu
 	remove_npu_runtime
+	restart_gazed || die "gazed does not start, see journalctl -u gazed"
+}
+
+# Always running answers at once; on demand, the next request starts gazed, a little slower, and
+# it exits once unused for the time chosen.
+setup_start_mode() {
+	if ! ask "== Start gazed only when needed (no RAM while unused, about 0.5 s more to start)?"; then
+		remove_gazed_dropin "$ON_DEMAND_DROPIN"
+		sudo systemctl enable gazed
+		return 0
+	fi
+
+	local idle_minutes=0
+	if ask "== Keep it running a while after each use, so the next one is instant?"; then
+		idle_minutes=$(ask_minutes "   For how many minutes?" 5)
+	fi
+	write_gazed_dropin "$ON_DEMAND_DROPIN" "Environment=GAZED_IDLE_EXIT_SECONDS=$((idle_minutes * 60))"
+	sudo systemctl disable gazed
+	if runs_on_npu && ask "== Keep the NPU's compiled models in RAM while gazed is stopped (12 MB; otherwise each start takes about 1 s more)?"; then
+		place_npu_cache kept
+	fi
 	restart_gazed || die "gazed does not start, see journalctl -u gazed"
 }
 
@@ -175,6 +230,7 @@ uninstall() {
 	remove_pam_blocks gaze
 	sudo systemctl disable --now gazed 2>/dev/null || true
 	remove_npu_runtime
+	remove_gazed_dropin "$ON_DEMAND_DROPIN"
 	local package
 	for package in $GAZE_PACKAGES; do
 		if is_package_installed "$package"; then
@@ -201,6 +257,7 @@ install() {
 	echo "== Starting gazed (the first start downloads its models)"
 	restart_gazed || die "gazed does not start, see journalctl -u gazed"
 	setup_npu
+	setup_start_mode
 	add_pam_blocks gaze "$PAM_LINES"
 }
 
