@@ -30,6 +30,7 @@ NPU_WHEEL_URL=https://files.pythonhosted.org/packages/08/07/f225999919f56506b603
 NPU_WHEEL_SHA256=2c3bb73e68ac27f4891af8a595c1faf574ec68b772e6583c90a0b997a1822782
 NPU_RUNTIME_DIR=/opt/onnxruntime-openvino
 GAZE_OPENVINO_DIR=/usr/lib/gaze/runtimes/openvino
+NPU_DROPIN=/etc/systemd/system/gazed.service.d/npu-cache-in-ram.conf
 
 ask() {
 	local answer
@@ -99,6 +100,15 @@ install_npu_runtime() {
 
 remove_npu_runtime() {
 	sudo rm -rf "$NPU_RUNTIME_DIR" "$GAZE_OPENVINO_DIR"
+	sudo rm -f "$NPU_DROPIN"
+	sudo systemctl daemon-reload
+}
+
+# Gives gazed its compiled-model cache in RAM; gazed rebuilds it (about 2 s) each time it starts.
+keep_npu_cache_in_ram() {
+	printf '[Service]\nTemporaryFileSystem=/var/cache/gaze/inference:mode=0700\n' |
+		sudo install -Dm644 /dev/stdin "$NPU_DROPIN"
+	sudo systemctl daemon-reload
 }
 
 use_cpu() {
@@ -106,16 +116,16 @@ use_cpu() {
 	set_config device '"cpu"'
 }
 
-# Gaze loads its models again after a restart from a compiled cache, so it is started twice.
 setup_npu() {
 	has_intel_npu || return 0
 	ask "== An Intel NPU is here. Run the face models on it (downloads 85 MB)?" || return 0
 
 	yay -S --needed intel-npu-driver level-zero-loader
 	install_npu_runtime
+	keep_npu_cache_in_ram
 	set_config execution_provider '"openvino"'
 	set_config device '"npu"'
-	if restart_gazed && restart_gazed; then
+	if restart_gazed; then
 		echo "== Gaze runs on the NPU"
 		return 0
 	fi
