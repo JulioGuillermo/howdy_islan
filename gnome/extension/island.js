@@ -18,6 +18,7 @@ const SILENCE_LIMIT_SECONDS = 5;
 const SHAKE_SECONDS = 0.6;
 const SHAKE_AMPLITUDE = 10;
 const SCAN_LINE_SECONDS = 1.4;
+const RESULT_TINT_SECONDS = 0.25;
 const FULL_STRETCH_SPEED = 900;
 
 export const Phase = {
@@ -68,11 +69,13 @@ export class Island {
         this.user = '';
         this.preview = null;
         this.faces = [];
+        this.landmarks = null;
         this.threshold = 0;
         this.scanTimeout = 0;
         this.scanStartedAt = 0;
         this.enrolmentProgress = 0;
         this.shakeStartedAt = 0;
+        this.resultAt = 0;
         this.lastMessageAt = now;
         this.collapseAt = 0;
     }
@@ -81,8 +84,10 @@ export class Island {
         this.user = user;
         this.preview = null;
         this.faces = [];
+        this.landmarks = null;
         this.scanStartedAt = 0;
         this.shakeStartedAt = 0;
+        this.resultAt = 0;
         this._setPhase(Phase.PREPARING, SCAN_COLOR, 'Opening camera', 'Look at the screen');
         this._expand();
     }
@@ -115,8 +120,15 @@ export class Island {
     /* faces: [{x, y, width, height}] as fractions of the preview. */
     showFaces(faces) {
         this.faces = faces;
+        this.landmarks = null;
         if (this.phase === Phase.SCANNING && faces.length === 0)
             this.subtitle = 'Looking for your face';
+        this._touch();
+    }
+
+    /* landmarks: the first face's eyes, nose tip and mouth corners, [{x, y}] as fractions of the preview. */
+    showLandmarks(landmarks) {
+        this.landmarks = landmarks;
         this._touch();
     }
 
@@ -220,6 +232,13 @@ export class Island {
         return (this.now % SCAN_LINE_SECONDS) / SCAN_LINE_SECONDS;
     }
 
+    /* How far the preview has taken the result's colour: 0 until there is a result, then up to 1. */
+    resultTint() {
+        if (this.phase !== Phase.SUCCESS && this.phase !== Phase.FAILURE)
+            return 0;
+        return clamp((this.now - this.resultAt) / RESULT_TINT_SECONDS, 0, 1);
+    }
+
     _setPhase(phase, accent, title, subtitle) {
         this.phase = phase;
         this.accent = accent;
@@ -251,11 +270,13 @@ export class Island {
 
     _succeed(title, subtitle) {
         this._setPhase(Phase.SUCCESS, SUCCESS_COLOR, title, subtitle);
+        this.resultAt = this.now;
         this.collapseAt = this.now + SUCCESS_HOLD_SECONDS;
     }
 
     _fail(title, subtitle) {
         this._setPhase(Phase.FAILURE, FAILURE_COLOR, title, subtitle);
+        this.resultAt = this.now;
         this.shakeStartedAt = this.now;
         this.collapseAt = this.now + FAILURE_HOLD_SECONDS;
     }

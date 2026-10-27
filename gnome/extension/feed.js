@@ -10,6 +10,7 @@ export const SOCKET_NAME = 'howdy-island.sock';
 const MAX_MESSAGE_BYTES = 65536;
 const FRAME_HEADER_BYTES = 4;
 const VALUES_PER_FACE = 4;
+const LANDMARK_COUNT = 5;
 
 function parseFaces(text) {
     const values = text.trim().split(/\s+/).filter(value => value !== '').map(Number);
@@ -19,6 +20,17 @@ function parseFaces(text) {
         faces.push({x, y, width, height});
     }
     return faces;
+}
+
+/* Landmarks message: x and y of each landmark, all of them or none. */
+function parseLandmarks(text) {
+    const values = text.trim().split(/\s+/).filter(value => value !== '').map(Number);
+    if (values.length !== 2 * LANDMARK_COUNT || values.some(Number.isNaN))
+        return null;
+    const landmarks = [];
+    for (let i = 0; i < values.length; i += 2)
+        landmarks.push({x: values[i], y: values[i + 1]});
+    return landmarks;
 }
 
 /* Frame message: width and height as little-endian 16-bit numbers, then one gray byte per pixel. */
@@ -52,6 +64,12 @@ function apply(island, kind, payload) {
     case 'D':
         island.showFaces(parseFaces(text));
         break;
+    case 'L': {
+        const landmarks = parseLandmarks(text);
+        if (landmarks)
+            island.showLandmarks(landmarks);
+        break;
+    }
     case 'C':
         island.showCertainty(Number(text));
         break;

@@ -18,6 +18,7 @@
 #define SHAKE_AMPLITUDE 10.0
 #define SCAN_LINE_SECONDS 1.4
 #define FULL_STRETCH_SPEED 900.0
+#define RESULT_TINT_SECONDS 0.25
 
 static const struct color SCAN_COLOR = {0.35, 0.78, 0.98};
 static const struct color SUCCESS_COLOR = {0.19, 0.82, 0.35};
@@ -98,6 +99,11 @@ static bool is_shaking(const struct island *island)
 	return island->shake_started_at > 0 && island->now - island->shake_started_at < SHAKE_SECONDS;
 }
 
+static bool has_result(const struct island *island)
+{
+	return island->phase == ISLAND_SUCCESS || island->phase == ISLAND_FAILURE;
+}
+
 void island_init(struct island *island, double now)
 {
 	memset(island, 0, sizeof *island);
@@ -113,8 +119,10 @@ void island_begin(struct island *island, uid_t user_uid, const char *user)
 	island->user_uid = user_uid;
 	island->preview_width = 0;
 	island->face_count = 0;
+	island->has_landmarks = false;
 	island->scan_started_at = 0;
 	island->shake_started_at = 0;
+	island->result_at = 0;
 	set_phase(island, ISLAND_PREPARING, SCAN_COLOR, "Opening camera", "Look at the screen");
 	expand(island);
 }
@@ -156,8 +164,16 @@ void island_show_faces(struct island *island, const struct face_box *faces, int 
 {
 	island->face_count = count < ISLAND_MAX_FACES ? count : ISLAND_MAX_FACES;
 	memcpy(island->faces, faces, sizeof *faces * island->face_count);
+	island->has_landmarks = false;
 	if (island->phase == ISLAND_SCANNING && count == 0)
 		snprintf(island->subtitle, sizeof island->subtitle, "Looking for your face");
+	touch(island);
+}
+
+void island_show_landmarks(struct island *island, const struct point *landmarks)
+{
+	memcpy(island->landmarks, landmarks, sizeof island->landmarks);
+	island->has_landmarks = true;
 	touch(island);
 }
 
@@ -184,12 +200,14 @@ void island_cancel(struct island *island)
 static void succeed(struct island *island, const char *title, const char *subtitle)
 {
 	set_phase(island, ISLAND_SUCCESS, SUCCESS_COLOR, title, subtitle);
+	island->result_at = island->now;
 	island->collapse_at = island->now + SUCCESS_HOLD_SECONDS;
 }
 
 static void fail(struct island *island, const char *title, const char *subtitle)
 {
 	set_phase(island, ISLAND_FAILURE, FAILURE_COLOR, title, subtitle);
+	island->result_at = island->now;
 	island->shake_started_at = island->now;
 	island->collapse_at = island->now + FAILURE_HOLD_SECONDS;
 }
@@ -258,7 +276,8 @@ void island_advance(struct island *island, double now)
 bool island_is_animating(const struct island *island)
 {
 	bool moving = !spring_is_settled(&island->width) || !spring_is_settled(&island->height);
-	return moving || is_working(island) || is_shaking(island);
+	bool tinting = has_result(island) && island_result_tint(island) < 1;
+	return moving || is_working(island) || is_shaking(island) || tinting;
 }
 
 bool island_is_raised(const struct island *island)
@@ -316,4 +335,11 @@ double island_scan_line(const struct island *island)
 	if (island->phase != ISLAND_SCANNING && island->phase != ISLAND_ENROLLING)
 		return -1;
 	return fmod(island->now, SCAN_LINE_SECONDS) / SCAN_LINE_SECONDS;
+}
+
+double island_result_tint(const struct island *island)
+{
+	if (!has_result(island))
+		return 0;
+	return clamp((island->now - island->result_at) / RESULT_TINT_SECONDS, 0, 1);
 }

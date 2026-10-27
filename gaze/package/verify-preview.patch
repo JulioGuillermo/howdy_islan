@@ -1,12 +1,12 @@
 diff --git a/crates/gaze-vision/src/face.rs b/crates/gaze-vision/src/face.rs
-index 3371986..823319c 100644
+index 3371986..ae3fa1e 100644
 --- a/crates/gaze-vision/src/face.rs
 +++ b/crates/gaze-vision/src/face.rs
 @@ -337,6 +337,7 @@ pub struct FaceChecker {
      pub dark_luma_threshold: u8,
      pub rgb_luma_history: std::collections::VecDeque<u8>,
      last_rgb_face_luma: Option<RgbFaceLuma>,
-+    last_face_box: Option<[f32; 4]>,
++    last_face: Option<Vec<f32>>,
      pub spectrum: Spectrum,
      pub check_centering_and_proximity: bool,
      pub min_face_size_ratio: f32,
@@ -14,7 +14,7 @@ index 3371986..823319c 100644
              dark_luma_threshold: config.cameras.dark_luma_threshold,
              rgb_luma_history: std::collections::VecDeque::new(),
              last_rgb_face_luma: None,
-+            last_face_box: None,
++            last_face: None,
              spectrum,
              check_centering_and_proximity,
              min_face_size_ratio: config.enrollment.effective_min_face_size_ratio(),
@@ -22,7 +22,7 @@ index 3371986..823319c 100644
          frame: &Mat,
      ) -> anyhow::Result<(CaptureStatus, Option<CaptureResult>)> {
          self.last_rgb_face_luma = None;
-+        self.last_face_box = None;
++        self.last_face = None;
  
          if let Some(status) = Self::dark_gate(self.spectrum, self.dark_luma_threshold, frame) {
              tracing::debug!(
@@ -30,54 +30,72 @@ index 3371986..823319c 100644
          let x2 = face[2];
          let y2 = face[3];
  
-+        self.last_face_box = Some(face_box_fractions(frame, (x1, y1, x2, y2)));
++        self.last_face = Some(face_fractions(frame, (x1, y1, x2, y2), kps.as_ref()));
 +
          let (yaw, pitch) = kps
              .as_ref()
              .and_then(estimate_head_pose)
-@@ -593,6 +598,25 @@ impl FaceChecker {
+@@ -593,6 +598,42 @@ impl FaceChecker {
      pub fn rgb_face_luma(&self) -> Option<RgbFaceLuma> {
          self.last_rgb_face_luma
      }
 +
-+    /// The face found in the last frame as x, y, width and height, fractions of the frame.
-+    pub fn last_face_box(&self) -> Option<[f32; 4]> {
-+        self.last_face_box
++    /// The face found in the last frame, as fractions of the frame: x, y, width and height of its
++    /// box, then x and y of each of its five landmarks (eyes, nose tip, mouth corners) when found.
++    pub fn last_face(&self) -> Option<&[f32]> {
++        self.last_face.as_deref()
 +    }
 +}
 +
-+/// The detector works on the frame padded to a square, so its box is shifted back by the padding.
-+fn face_box_fractions(frame: &Mat, (x1, y1, x2, y2): (f32, f32, f32, f32)) -> [f32; 4] {
++/// The detector works on the frame padded to a square, so its points are shifted back by the padding.
++fn face_fractions(
++    frame: &Mat,
++    (x1, y1, x2, y2): (f32, f32, f32, f32),
++    landmarks: Option<&ndarray::Array3<f32>>,
++) -> Vec<f32> {
 +    let width = frame.cols().max(1) as f32;
 +    let height = frame.rows().max(1) as f32;
 +    let side = width.max(height);
 +    let left = ((side - width) / 2.0).floor();
 +    let top = ((side - height) / 2.0).floor();
-+    let x = ((x1 - left) / width).clamp(0.0, 1.0);
-+    let y = ((y1 - top) / height).clamp(0.0, 1.0);
-+    let right = ((x2 - left) / width).clamp(0.0, 1.0);
-+    let bottom = ((y2 - top) / height).clamp(0.0, 1.0);
-+    [x, y, right - x, bottom - y]
++    let fraction = |x: f32, y: f32| {
++        (
++            ((x - left) / width).clamp(0.0, 1.0),
++            ((y - top) / height).clamp(0.0, 1.0),
++        )
++    };
++
++    let (x, y) = fraction(x1, y1);
++    let (right, bottom) = fraction(x2, y2);
++    let mut face = vec![x, y, right - x, bottom - y];
++    if let Some(landmarks) = landmarks.filter(|marks| marks.shape()[0] > 0 && marks.shape()[1] >= 5) {
++        for point in 0..5 {
++            let (x, y) = fraction(landmarks[[0, point, 0]], landmarks[[0, point, 1]]);
++            face.extend([x, y]);
++        }
++    }
++    face
  }
  
  fn frame_is_too_dark(frame: &Mat, threshold: u8) -> bool {
 diff --git a/crates/gazed/src/daemon/interface.rs b/crates/gazed/src/daemon/interface.rs
-index 683013b..0027dbe 100644
+index 683013b..c613734 100644
 --- a/crates/gazed/src/daemon/interface.rs
 +++ b/crates/gazed/src/daemon/interface.rs
-@@ -1341,6 +1341,10 @@ impl AuthDaemon {
+@@ -1341,6 +1341,11 @@ impl AuthDaemon {
      #[zbus(signal)]
      pub(super) async fn preview_frame(ctxt: &SignalEmitter<'_>, jpeg: &[u8]) -> zbus::Result<()>;
  
-+    /// The face in the last preview frame: x, y, width and height as fractions; empty when none.
++    /// The face in the last preview frame, as fractions: x, y, width and height of its box, then
++    /// x and y of its eyes, nose tip and mouth corners when found; empty when there is no face.
 +    #[zbus(signal)]
-+    pub(super) async fn preview_faces(ctxt: &SignalEmitter<'_>, face_box: &[f64]) -> zbus::Result<()>;
++    pub(super) async fn preview_faces(ctxt: &SignalEmitter<'_>, face: &[f64]) -> zbus::Result<()>;
 +
      #[zbus(signal)]
      pub(super) async fn enroll_status(
          ctxt: &SignalEmitter<'_>,
 diff --git a/crates/gazed/src/daemon/verify.rs b/crates/gazed/src/daemon/verify.rs
-index 2f0e4a1..ab70183 100644
+index 2f0e4a1..d62a727 100644
 --- a/crates/gazed/src/daemon/verify.rs
 +++ b/crates/gazed/src/daemon/verify.rs
 @@ -629,6 +629,8 @@ impl AuthDaemon {
@@ -85,7 +103,7 @@ index 2f0e4a1..ab70183 100644
  
                  let (result_tx, mut result_rx) = tokio::sync::mpsc::channel::<VerifyMsg>(10);
 +                let (preview_tx, mut preview_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-+                let (face_box_tx, mut face_box_rx) = tokio::sync::mpsc::channel::<Vec<f64>>(1);
++                let (face_tx, mut face_rx) = tokio::sync::mpsc::channel::<Vec<f64>>(1);
                  let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
                  // Signals that the RGB phase released its camera so the IR thread can take it,
                  // letting single-function UVC devices (e.g. Logitech Brio) run hybrid verify.
@@ -94,7 +112,7 @@ index 2f0e4a1..ab70183 100644
                      let stop_clone = stop_flag.clone();
                      let tx = result_tx.clone();
 +                    let preview_tx_clone = preview_tx.clone();
-+                    let face_box_tx_clone = face_box_tx.clone();
++                    let face_tx_clone = face_tx.clone();
                      let detector_arc = ir_models.detector;
                      let config_clone = config.clone();
                      let recognizer_ir_arc = ir_models.recognizer;
@@ -118,8 +136,8 @@ index 2f0e4a1..ab70183 100644
                                      }
                                  }
                              };
-+                            let face_box = checker.last_face_box().map(|b| b.map(f64::from).to_vec()).unwrap_or_default();
-+                            let _ = face_box_tx_clone.try_send(face_box);
++                            let face: Vec<f64> = checker.last_face().unwrap_or_default().iter().copied().map(f64::from).collect();
++                            let _ = face_tx_clone.try_send(face);
                              if checker.take_rotation_changed() {
                                  landmark_seq.clear();
                              }
@@ -128,7 +146,7 @@ index 2f0e4a1..ab70183 100644
  
                  drop(result_tx);
 +                drop(preview_tx);
-+                drop(face_box_tx);
++                drop(face_tx);
  
                  let mut last_emitted_status: Option<CaptureStatus> = None;
                  let mut suspended = false;
@@ -139,8 +157,8 @@ index 2f0e4a1..ab70183 100644
 +                        Some(jpeg) = preview_rx.recv() => {
 +                            let _ = Self::preview_frame(&ctxt, &jpeg).await;
 +                        }
-+                        Some(face_box) = face_box_rx.recv() => {
-+                            let _ = Self::preview_faces(&ctxt, &face_box).await;
++                        Some(face) = face_rx.recv() => {
++                            let _ = Self::preview_faces(&ctxt, &face).await;
 +                        }
                          msg_opt = result_rx.recv() => {
                              let Some(msg) = msg_opt else {

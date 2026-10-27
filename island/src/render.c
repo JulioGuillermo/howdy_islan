@@ -18,7 +18,13 @@
 #define PADDING 12.0
 #define PREVIEW_ASPECT 1.6
 #define PREVIEW_RADIUS 12.0
+#define PREVIEW_FEATHER 10.0
+#define RESULT_TINT_STRENGTH 0.45
 #define FACE_RADIUS 6.0
+#define LANDMARK_RADIUS 1.6
+#define LANDMARK_ALPHA 0.7
+#define LANDMARK_LINE_WIDTH 0.8
+#define LANDMARK_LINE_ALPHA 0.3
 #define BADGE_RADIUS 13.0
 #define BAR_HEIGHT 4.0
 
@@ -29,7 +35,10 @@
 
 static const struct color WHITE = {1, 1, 1};
 static const struct color SUBTITLE_COLOR = {0.75, 0.75, 0.78};
-static const struct color PREVIEW_BACKGROUND = {0.08, 0.08, 0.09};
+static const struct color BLACK = {0, 0, 0};
+
+/* The landmark lines: across the eyes, from each eye to the nose, from the nose to each mouth corner, and across the mouth. */
+static const int LANDMARK_LINES[][2] = {{0, 1}, {0, 2}, {1, 2}, {2, 3}, {2, 4}, {3, 4}};
 
 static double clamp(double value, double low, double high)
 {
@@ -99,8 +108,24 @@ static void rounded_rectangle(cairo_t *cr, double x, double y, double width, dou
 	cairo_close_path(cr);
 }
 
+/* Each colour channel scaled toward the accent: gray, a little green on success, a little red on failure. */
+static struct color preview_tint(const struct island *island)
+{
+	double strength = RESULT_TINT_STRENGTH * island_result_tint(island);
+	return (struct color){
+		1 - strength + strength * island->accent.red,
+		1 - strength + strength * island->accent.green,
+		1 - strength + strength * island->accent.blue,
+	};
+}
+
 static cairo_surface_t *preview_image(const struct island *island)
 {
+	struct color tint = preview_tint(island);
+	uint32_t red_scale = (uint32_t)(tint.red * 256);
+	uint32_t green_scale = (uint32_t)(tint.green * 256);
+	uint32_t blue_scale = (uint32_t)(tint.blue * 256);
+
 	cairo_surface_t *image = cairo_image_surface_create(CAIRO_FORMAT_RGB24, island->preview_width, island->preview_height);
 	cairo_surface_flush(image);
 	unsigned char *data = cairo_image_surface_get_data(image);
@@ -111,7 +136,10 @@ static cairo_surface_t *preview_image(const struct island *island)
 		const uint8_t *gray_row = island->preview + (size_t)y * island->preview_width;
 		for (int x = 0; x < island->preview_width; x++) {
 			uint32_t gray = gray_row[x];
-			row[x] = 0xff000000u | gray << 16 | gray << 8 | gray;
+			uint32_t red = gray * red_scale >> 8;
+			uint32_t green = gray * green_scale >> 8;
+			uint32_t blue = gray * blue_scale >> 8;
+			row[x] = 0xff000000u | red << 16 | green << 8 | blue;
 		}
 	}
 
@@ -119,12 +147,59 @@ static cairo_surface_t *preview_image(const struct island *island)
 	return image;
 }
 
+/* Black fading in from one edge of the preview over PREVIEW_FEATHER. */
+static void fade_edge(cairo_t *cr, double x0, double y0, double x1, double y1)
+{
+	cairo_pattern_t *fade = cairo_pattern_create_linear(x0, y0, x1, y1);
+	cairo_pattern_add_color_stop_rgba(fade, 0, 0, 0, 0, 1);
+	cairo_pattern_add_color_stop_rgba(fade, 1, 0, 0, 0, 0);
+	cairo_set_source(cr, fade);
+	cairo_paint(cr);
+	cairo_pattern_destroy(fade);
+}
+
+/* The preview's edges melt into the island's black instead of ending in a hard line. */
+static void feather_edges(cairo_t *cr, double x, double y, double width, double height)
+{
+	fade_edge(cr, x, y, x + PREVIEW_FEATHER, y);
+	fade_edge(cr, x + width, y, x + width - PREVIEW_FEATHER, y);
+	fade_edge(cr, x, y, x, y + PREVIEW_FEATHER);
+	fade_edge(cr, x, y + height, x, y + height - PREVIEW_FEATHER);
+}
+
+/* The eyes, nose tip and mouth corners as small dots, joined by faint lines. */
+static void draw_landmarks(cairo_t *cr, const struct island *island, double x, double y, double width, double height)
+{
+	struct point points[ISLAND_LANDMARKS];
+	for (int i = 0; i < ISLAND_LANDMARKS; i++) {
+		points[i].x = x + (1 - island->landmarks[i].x) * width;
+		points[i].y = y + island->landmarks[i].y * height;
+	}
+
+	cairo_set_line_width(cr, LANDMARK_LINE_WIDTH);
+	for (size_t i = 0; i < sizeof LANDMARK_LINES / sizeof *LANDMARK_LINES; i++) {
+		struct point from = points[LANDMARK_LINES[i][0]];
+		struct point to = points[LANDMARK_LINES[i][1]];
+		cairo_move_to(cr, from.x, from.y);
+		cairo_line_to(cr, to.x, to.y);
+	}
+	set_color(cr, island->accent, LANDMARK_LINE_ALPHA);
+	cairo_stroke(cr);
+
+	for (int i = 0; i < ISLAND_LANDMARKS; i++) {
+		cairo_new_sub_path(cr);
+		cairo_arc(cr, points[i].x, points[i].y, LANDMARK_RADIUS, 0, 2 * M_PI);
+	}
+	set_color(cr, island->accent, LANDMARK_ALPHA);
+	cairo_fill(cr);
+}
+
 static void draw_preview(cairo_t *cr, const struct island *island, double x, double y, double width, double height)
 {
 	cairo_save(cr);
 	rounded_rectangle(cr, x, y, width, height, PREVIEW_RADIUS);
 	cairo_clip(cr);
-	set_color(cr, PREVIEW_BACKGROUND, 1);
+	set_color(cr, BLACK, 1);
 	cairo_paint(cr);
 
 	if (island->preview_width > 0) {
@@ -137,6 +212,7 @@ static void draw_preview(cairo_t *cr, const struct island *island, double x, dou
 		cairo_paint(cr);
 		cairo_restore(cr);
 		cairo_surface_destroy(image);
+		feather_edges(cr, x, y, width, height);
 	}
 
 	double scan_line = island_scan_line(island);
@@ -155,6 +231,8 @@ static void draw_preview(cairo_t *cr, const struct island *island, double x, dou
 		cairo_set_line_width(cr, 2);
 		cairo_stroke(cr);
 	}
+	if (island->has_landmarks)
+		draw_landmarks(cr, island, x, y, width, height);
 }
 
 static double text_width(cairo_t *cr, const char *text)

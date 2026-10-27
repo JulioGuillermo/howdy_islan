@@ -13,6 +13,7 @@
 
 #define ISLAND_TEXT_MAX 96
 #define ISLAND_MAX_FACES 8
+#define ISLAND_LANDMARKS 5
 #define ISLAND_PREVIEW_MAX_PIXELS (320 * 240)
 
 enum island_phase {
@@ -28,6 +29,12 @@ struct color {
 	double red;
 	double green;
 	double blue;
+};
+
+/* A point as fractions of the preview. */
+struct point {
+	double x;
+	double y;
 };
 
 /* Position and size as fractions of the preview. */
@@ -56,11 +63,14 @@ struct island {
 	int preview_height;
 	struct face_box faces[ISLAND_MAX_FACES];
 	int face_count;
+	struct point landmarks[ISLAND_LANDMARKS];
+	bool has_landmarks;
 	double threshold;
 	double scan_timeout;
 	double scan_started_at;
 	double enrolment_progress;
 	double shake_started_at;
+	double result_at;
 	double last_message_at;
 	double collapse_at;
 	double now;
@@ -72,6 +82,8 @@ void island_begin(struct island *island, uid_t user_uid, const char *user);
 void island_scan(struct island *island, double timeout, double threshold);
 void island_show_frame(struct island *island, int width, int height, const uint8_t *gray_pixels);
 void island_show_faces(struct island *island, const struct face_box *faces, int count);
+/* The first face's eyes, nose tip and mouth corners; island_show_faces clears them. */
+void island_show_landmarks(struct island *island, const struct point *landmarks);
 void island_show_certainty(struct island *island, double value);
 void island_finish(struct island *island, int exit_code);
 /* A line under the title while working, such as "Come closer". */
@@ -101,3 +113,5 @@ double island_stretch(const struct island *island);
 double island_progress(const struct island *island);
 /* Height of the sweeping line as a fraction of the preview; negative when not scanning. */
 double island_scan_line(const struct island *island);
+/* How far the preview has taken the result's colour: 0 until there is a result, then up to 1. */
+double island_result_tint(const struct island *island);

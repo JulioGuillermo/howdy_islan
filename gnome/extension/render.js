@@ -28,7 +28,13 @@ const OUTLINE_ALPHA = 0.45;
 const PADDING = 12;
 const PREVIEW_ASPECT = 1.6;
 const PREVIEW_RADIUS = 12;
+const PREVIEW_FEATHER = 10;
+const RESULT_TINT_STRENGTH = 0.45;
 const FACE_RADIUS = 6;
+const LANDMARK_RADIUS = 1.6;
+const LANDMARK_ALPHA = 0.7;
+const LANDMARK_LINE_WIDTH = 0.8;
+const LANDMARK_LINE_ALPHA = 0.3;
 const BADGE_RADIUS = 13;
 const BAR_HEIGHT = 4;
 const TITLE_FONT = 'Sans Bold';
@@ -38,7 +44,10 @@ const SUBTITLE_SIZE = 12.5;
 
 const WHITE = [1, 1, 1];
 const SUBTITLE_COLOR = [0.75, 0.75, 0.78];
-const PREVIEW_BACKGROUND = [0.08, 0.08, 0.09];
+const BLACK = [0, 0, 0];
+
+/* The landmark lines: across the eyes, from each eye to the nose, from the nose to each mouth corner, and across the mouth. */
+const LANDMARK_LINES = [[0, 1], [0, 2], [1, 2], [2, 3], [2, 4], [3, 4]];
 
 const PREVIEW_HEIGHT = EXPANDED_HEIGHT - 2 * PADDING;
 
@@ -189,7 +198,7 @@ export function drawContentBelow(cr, island) {
     clear(cr);
     const box = PREVIEW_BOX;
     roundedRectangle(cr, box.x, box.y, box.width, box.height, PREVIEW_RADIUS);
-    setColor(cr, PREVIEW_BACKGROUND, 1);
+    setColor(cr, BLACK, 1);
     cr.fill();
 
     const textLeft = 2 * PADDING + box.width;
@@ -214,6 +223,9 @@ export function drawContentAbove(cr, island) {
     cr.fill();
     cr.setFillRule(Cairo.FillRule.WINDING);
 
+    if (island.preview)
+        featherEdges(cr, box);
+
     const scanLine = island.scanLine();
     if (scanLine !== null) {
         cr.rectangle(box.x, box.y + scanLine * box.height - 1, box.width, 2);
@@ -229,4 +241,56 @@ export function drawContentAbove(cr, island) {
         setColor(cr, island.accent, 0.95);
         cr.stroke();
     }
+    if (island.landmarks)
+        drawLandmarks(cr, island, box);
+}
+
+/* Each colour channel's scale toward the accent: gray, a little green on success, a little red on failure. */
+export function previewTint(island) {
+    const strength = RESULT_TINT_STRENGTH * island.resultTint();
+    return island.accent.map(channel => 1 - strength + strength * channel);
+}
+
+/* Black fading in from one edge of the preview over PREVIEW_FEATHER. */
+function fadeEdge(cr, x0, y0, x1, y1) {
+    const fade = new Cairo.LinearGradient(x0, y0, x1, y1);
+    fade.addColorStopRGBA(0, 0, 0, 0, 1);
+    fade.addColorStopRGBA(1, 0, 0, 0, 0);
+    cr.setSource(fade);
+    cr.paint();
+}
+
+/* The preview's edges melt into the island's black instead of ending in a hard line. */
+function featherEdges(cr, box) {
+    cr.save();
+    cr.rectangle(box.x, box.y, box.width, box.height);
+    cr.clip();
+    fadeEdge(cr, box.x, box.y, box.x + PREVIEW_FEATHER, box.y);
+    fadeEdge(cr, box.x + box.width, box.y, box.x + box.width - PREVIEW_FEATHER, box.y);
+    fadeEdge(cr, box.x, box.y, box.x, box.y + PREVIEW_FEATHER);
+    fadeEdge(cr, box.x, box.y + box.height, box.x, box.y + box.height - PREVIEW_FEATHER);
+    cr.restore();
+}
+
+/* The eyes, nose tip and mouth corners as small dots, joined by faint lines. */
+function drawLandmarks(cr, island, box) {
+    const points = island.landmarks.map(({x, y}) => ({
+        x: box.x + (1 - x) * box.width,
+        y: box.y + y * box.height,
+    }));
+
+    cr.setLineWidth(LANDMARK_LINE_WIDTH);
+    for (const [from, to] of LANDMARK_LINES) {
+        cr.moveTo(points[from].x, points[from].y);
+        cr.lineTo(points[to].x, points[to].y);
+    }
+    setColor(cr, island.accent, LANDMARK_LINE_ALPHA);
+    cr.stroke();
+
+    for (const point of points) {
+        cr.newSubPath();
+        cr.arc(point.x, point.y, LANDMARK_RADIUS, 0, 2 * Math.PI);
+    }
+    setColor(cr, island.accent, LANDMARK_ALPHA);
+    cr.fill();
 }

@@ -12,6 +12,8 @@
 #define NOT_RECOGNISED_CODE 11
 #define TOO_DARK_CODE 13
 #define FRAME_HEADER_BYTES 4
+#define FACE_BOX_VALUES 4
+#define LANDMARK_VALUES 10
 
 struct text_pair {
 	const char *key;
@@ -213,18 +215,29 @@ static void show_preview(struct gaze_watch *watch, sd_bus_message *signal)
 	island_link_send(&watch->island, 'G', frame, FRAME_HEADER_BYTES + pixels);
 }
 
-/* The face box comes as x, y, width and height fractions; the island's 'D' message takes the same. */
-static void show_face_box(struct gaze_watch *watch, sd_bus_message *signal)
+/*
+ * The face comes as fractions: x, y, width and height of its box, then x and y of its five landmarks
+ * when gazed found them. The box goes to the island as a 'D' message, the landmarks as an 'L' after it.
+ */
+static void show_face(struct gaze_watch *watch, sd_bus_message *signal)
 {
 	const double *values = NULL;
 	size_t length = 0;
 	if (sd_bus_message_read_array(signal, 'd', (const void **)&values, &length) < 0)
 		return;
+	size_t count = length / sizeof *values;
 
-	char text[64] = "";
-	if (length == 4 * sizeof *values)
+	char text[256] = "";
+	if (count >= FACE_BOX_VALUES)
 		snprintf(text, sizeof text, "%.4f %.4f %.4f %.4f", values[0], values[1], values[2], values[3]);
 	island_link_send_text(&watch->island, 'D', text);
+	if (count != FACE_BOX_VALUES + LANDMARK_VALUES)
+		return;
+
+	size_t used = 0;
+	for (size_t i = FACE_BOX_VALUES; i < count; i++)
+		used += snprintf(text + used, sizeof text - used, "%.4f ", values[i]);
+	island_link_send_text(&watch->island, 'L', text);
 }
 
 static void handle_signal(struct gaze_watch *watch, sd_bus_message *signal, const char *member, double now)
@@ -236,7 +249,7 @@ static void handle_signal(struct gaze_watch *watch, sd_bus_message *signal, cons
 	} else if (strcmp(member, "PreviewFrame") == 0) {
 		show_preview(watch, signal);
 	} else if (strcmp(member, "PreviewFaces") == 0) {
-		show_face_box(watch, signal);
+		show_face(watch, signal);
 	} else if (strcmp(member, "VerifyStatus") == 0 && watch->activity == GAZE_VERIFYING) {
 		show_verify_result(watch, signal);
 	} else if (strcmp(member, "EnrollStatus") == 0 && watch->activity == GAZE_ENROLLING) {

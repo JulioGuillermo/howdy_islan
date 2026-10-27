@@ -13,6 +13,7 @@
 #define MAX_MESSAGE_BYTES 65536
 #define FRAME_HEADER_BYTES 4
 #define VALUES_PER_FACE 4
+#define VALUES_PER_POINT 2
 #define NO_SENDER ((uid_t)-1)
 #define GNOME_SOCKET_PATTERN "/run/user/%u/howdy-island.sock"
 
@@ -97,6 +98,24 @@ static void show_faces(struct island *island, const char *text)
 	island_show_faces(island, faces, count);
 }
 
+/* Landmarks message: x and y of each landmark, all of them or none. */
+static void show_landmarks(struct island *island, const char *text)
+{
+	double values[ISLAND_LANDMARKS * VALUES_PER_POINT];
+	for (int i = 0; i < ISLAND_LANDMARKS * VALUES_PER_POINT; i++) {
+		char *end;
+		values[i] = strtod(text, &end);
+		if (end == text)
+			return;
+		text = end;
+	}
+
+	struct point landmarks[ISLAND_LANDMARKS];
+	for (int i = 0; i < ISLAND_LANDMARKS; i++)
+		landmarks[i] = (struct point){values[2 * i], values[2 * i + 1]};
+	island_show_landmarks(island, landmarks);
+}
+
 /* A new scan replaces the running one. Root may scan anyone; a user, only themselves. */
 static bool begin(struct feed *feed, struct island *island, uid_t sender, const char *text)
 {
@@ -139,6 +158,9 @@ static bool dispatch(struct feed *feed, struct island *island, uid_t sender, cha
 		break;
 	case 'D':
 		show_faces(island, text);
+		break;
+	case 'L':
+		show_landmarks(island, text);
 		break;
 	case 'C':
 		island_show_certainty(island, strtod(text, NULL));

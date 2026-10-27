@@ -15,7 +15,7 @@ import {Feed} from './feed.js';
 import {EXPANDED_HEIGHT, EXPANDED_WIDTH, Island, Phase} from './island.js';
 import {
     CANVAS_HEIGHT, CANVAS_WIDTH, PREVIEW_BOX,
-    drawBody, drawContentAbove, drawContentBelow, drawOutline, islandCenterX,
+    drawBody, drawContentAbove, drawContentBelow, drawOutline, islandCenterX, previewTint,
 } from './render.js';
 
 const RGB_BYTES_PER_PIXEL = 3;
@@ -24,12 +24,13 @@ function monotonicSeconds() {
     return GLib.get_monotonic_time() / 1e6;
 }
 
-function grayToRgb(gray) {
+/* tint: how much of each gray value goes to red, green and blue. */
+function grayToRgb(gray, [red, green, blue]) {
     const rgb = new Uint8Array(gray.length * RGB_BYTES_PER_PIXEL);
     for (let i = 0; i < gray.length; i++) {
-        rgb[i * 3] = gray[i];
-        rgb[i * 3 + 1] = gray[i];
-        rgb[i * 3 + 2] = gray[i];
+        rgb[i * 3] = gray[i] * red;
+        rgb[i * 3 + 1] = gray[i] * green;
+        rgb[i * 3 + 2] = gray[i] * blue;
     }
     return rgb;
 }
@@ -106,16 +107,18 @@ class IslandOverlay {
 
     _uploadPreview() {
         const preview = this._island.preview;
-        if (preview === this._shownPreview)
+        const tint = previewTint(this._island);
+        if (preview === this._shownPreview && tint.join() === this._shownTint)
             return;
         this._shownPreview = preview;
+        this._shownTint = tint.join();
         this._preview.visible = preview !== null;
         if (!preview)
             return;
 
         const coglContext = global.stage.context.get_backend().get_cogl_context();
         const image = St.ImageContent.new_with_preferred_size(preview.width, preview.height);
-        image.set_bytes(coglContext, new GLib.Bytes(grayToRgb(preview.gray)), Cogl.PixelFormat.RGB_888,
+        image.set_bytes(coglContext, new GLib.Bytes(grayToRgb(preview.gray, tint)), Cogl.PixelFormat.RGB_888,
             preview.width, preview.height, preview.width * RGB_BYTES_PER_PIXEL);
         this._preview.content = image;
     }
