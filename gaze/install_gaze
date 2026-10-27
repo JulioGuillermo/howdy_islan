@@ -25,6 +25,14 @@ PAM_OPTOUT=/etc/gaze/pam.optout
 PAM_LINES="-auth      requisite    pam_faillock.so preauth
 auth       sufficient   pam_unix.so try_first_pass likeauth
 auth       sufficient   pam_gaze.so"
+# pam_gaze only talks to a gazed already running, so on demand PAM wakes it: without waiting
+# before the password prompt (it starts while the password is typed), then waiting before the face.
+GAZED_PING="/usr/bin/busctl call com.gundulabs.Gaze /com/gundulabs/Gaze org.freedesktop.DBus.Peer Ping"
+ON_DEMAND_PAM_LINES="-auth      requisite    pam_faillock.so preauth
+auth       optional     pam_exec.so quiet ${GAZED_PING/call/--expect-reply=no call}
+auth       sufficient   pam_unix.so try_first_pass likeauth
+auth       optional     pam_exec.so quiet ${GAZED_PING/call/--timeout=10 call}
+auth       sufficient   pam_gaze.so"
 GAZED_START_SECONDS=120
 
 NPU_WHEEL_URL=https://files.pythonhosted.org/packages/08/07/f225999919f56506b603aaa3ff837ad563ab26f86906ed7fa7e5abcd849e/onnxruntime_openvino-1.24.1-cp313-cp313-manylinux_2_28_x86_64.whl
@@ -184,6 +192,7 @@ setup_start_mode() {
 		idle_seconds=$(ask_seconds "   For how many seconds?" 300)
 	fi
 	write_gazed_dropin "$ON_DEMAND_DROPIN" "Environment=GAZED_IDLE_EXIT_SECONDS=$idle_seconds"
+	PAM_LINES=$ON_DEMAND_PAM_LINES
 	sudo systemctl disable gazed
 	if runs_on_npu && ask "== Keep the NPU's compiled models in RAM while gazed is stopped (12 MB; otherwise each start takes about 1 s more)?"; then
 		place_npu_cache kept
